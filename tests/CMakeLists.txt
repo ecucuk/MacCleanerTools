@@ -1,0 +1,4 @@
+add_executable(maccleaner_tests maccleaner_tests.cpp)
+target_link_libraries(maccleaner_tests PRIVATE maccleaner_core maccleaner_warnings)
+
+add_test(NAME maccleaner_tests COMMAND maccleaner_tests)

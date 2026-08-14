@@ -104,7 +104,7 @@
 
 #pragma mark - Shell
 
-@interface MCMainWindowController () <MCToolSidebarDelegate>
+@interface MCMainWindowController () <MCToolSidebarDelegate, NSWindowDelegate>
 @property(nonatomic, strong) MCToolSidebarController *sidebar;
 @property(nonatomic, strong) NSViewController *contentHost; // swaps tool views
 @property(nonatomic, copy) NSArray<MCToolEntry *> *tools;
@@ -126,6 +126,7 @@
     [window center];
 
     if ((self = [super initWithWindow:window])) {
+        window.delegate = self;
         MCToolEntry *cleaner = [[MCToolEntry alloc] init];
         cleaner.title = @"Storage Cleaner";
         cleaner.symbolName = @"trash";
@@ -169,6 +170,18 @@
         self.initialScanStarted = YES;
         [(MCCleanerViewController *)self.currentTool startInitialScan];
     }
+}
+
+#pragma mark NSWindowDelegate
+
+// The shell window *is* the app: the satellite windows (Activity, the Quick
+// Look panel) have no life of their own, so closing the main window
+// terminates cleanly instead of leaving a windowless-but-running app behind
+// an orphaned Activity window. terminate: closes every remaining window on
+// the way out; if termination was what triggered this close (Cmd-Q), the
+// extra terminate: is a no-op.
+- (void)windowWillClose:(NSNotification *)notification {
+    [NSApp terminate:nil];
 }
 
 #pragma mark MCToolSidebarDelegate

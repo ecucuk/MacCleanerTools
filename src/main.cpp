@@ -2,6 +2,7 @@
 #include "maccleaner/cleaner.hpp"
 #include "maccleaner/cli.hpp"
 #include "maccleaner/format.hpp"
+#include "maccleaner/optimizer.hpp"
 #include "maccleaner/processes.hpp"
 #include "maccleaner/safety.hpp"
 #include "maccleaner/scanner.hpp"
@@ -139,6 +140,42 @@ int runProcesses(const CliOptions& options) {
     return 0;
 }
 
+int runOptimize(const CliOptions& options) {
+    const std::vector<ProcessSample> samples = sampleProcesses(::geteuid());
+    const std::vector<OptimizationCandidate> candidates = findOptimizationCandidates(samples);
+
+    if (candidates.empty()) {
+        std::cout << "Nothing to reclaim: no orphaned helpers, zombies or idle update agents.\n";
+        return 0;
+    }
+
+    std::uintmax_t total = 0;
+    for (const OptimizationCandidate& candidate : candidates) {
+        std::printf("  %10s  %-28s  %s\n", humanReadableBytes(candidate.reclaimableBytes).c_str(),
+                     candidate.sample.name.c_str(), candidate.reason.c_str());
+        total += candidate.reclaimableBytes;
+    }
+    std::cout << "================================\n";
+    std::cout << candidates.size() << " process(es), " << humanReadableBytes(total) << " reclaimable\n";
+
+    if (!options.apply) {
+        std::cout << "\nReport only -- re-run with --apply to terminate these.\n";
+        return 0;
+    }
+
+    std::size_t terminated = 0;
+    for (const OptimizationCandidate& candidate : candidates) {
+        std::string error;
+        if (killProcess(candidate.sample.pid, KillMode::Graceful, error)) {
+            ++terminated;
+        } else {
+            std::cout << "FAIL  " << candidate.sample.name << " — " << error << "\n";
+        }
+    }
+    std::cout << "Terminated " << terminated << " of " << candidates.size() << ".\n";
+    return terminated == candidates.size() ? 0 : 1;
+}
+
 int runClean(const CliOptions& options) {
     const std::vector<ScanTarget> targets = selectTargets(options);
 
@@ -243,6 +280,8 @@ int main(int argc, char** argv) {
             return runBigFiles(options);
         case Command::Processes:
             return runProcesses(options);
+        case Command::Optimize:
+            return runOptimize(options);
     }
     return 0;
 }

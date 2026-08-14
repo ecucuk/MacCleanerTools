@@ -13,6 +13,7 @@ enum class Command {
     Clean,      // scan, then prompt/act according to options
     BigFiles,   // list the largest files under a root
     Processes,  // list the current user's processes by CPU/memory
+    Optimize,   // find (and with --apply, terminate) reclaimable processes
     Help,
 };
 

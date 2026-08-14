@@ -44,6 +44,7 @@ set(MACCLEANER_CORE_SOURCES
     src/cleaner.cpp
     src/bigfiles.cpp
     src/processes.cpp
+    src/optimizer.cpp
     src/cli.cpp
 )
 
@@ -131,6 +132,7 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
         src/gui/MCCleanerViewController.mm
         src/gui/MCLargeFilesViewController.mm
         src/gui/MCPerformanceViewController.mm
+        src/gui/MCOptimizeSheetController.mm
         src/gui/MCUsageSummaryView.mm
         "${MACCLEANER_VIZ_HEADER_STAGED}"
     )

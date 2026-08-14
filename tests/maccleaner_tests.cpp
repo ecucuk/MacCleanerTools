@@ -3,6 +3,7 @@
 // returns the failure count as the process exit code (0 == all green), which
 // is all CTest needs.
 
+#include "maccleaner/bigfiles.hpp"
 #include "maccleaner/cleaner.hpp"
 #include "maccleaner/cli.hpp"
 #include "maccleaner/format.hpp"
@@ -442,6 +443,106 @@ std::optional<CliOptions> parse(std::vector<const char*> args, CliParseError& er
     return parseArgs(static_cast<int>(argv.size()), argv.data(), error);
 }
 
+// --- bigfiles -----------------------------------------------------------
+
+using maccleaner::BigFile;
+using maccleaner::BigFileScanOptions;
+using maccleaner::findBigFiles;
+using maccleaner::parseSizeSpec;
+
+void testBigFilesFindsAndSortsAboveThreshold() {
+    SizedTree tree;
+    // SizedTree gives: nested/big.bin (1000), plain/a.bin (10), loose.bin (5).
+    std::ofstream(tree.top() / "medium.bin") << std::string(100, 'x');
+
+    BigFileScanOptions options;
+    options.root = tree.top();
+    options.minSizeBytes = 50;
+
+    const std::vector<BigFile> files = findBigFiles(options);
+    CHECK_EQ(files.size(), 2u); // big.bin (1000) and medium.bin (100)
+    CHECK_EQ(files[0].sizeBytes, 1000u);
+    CHECK_EQ(files[1].sizeBytes, 100u);
+    CHECK(files[0].path.filename() == "big.bin");
+}
+
+void testBigFilesHonoursTopCap() {
+    SizedTree tree;
+
+    BigFileScanOptions options;
+    options.root = tree.top();
+    options.minSizeBytes = 1;
+    options.maxResults = 2;
+
+    const std::vector<BigFile> files = findBigFiles(options);
+    CHECK_EQ(files.size(), 2u); // the two biggest of the three
+    CHECK_EQ(files[0].sizeBytes, 1000u);
+    CHECK_EQ(files[1].sizeBytes, 10u);
+}
+
+void testBigFilesIgnoresSymlinks() {
+    SizedTree tree;
+    std::error_code ec;
+    // A file symlink to the biggest file: must not be reported (double count),
+    // and a directory symlink loop must not hang the walk.
+    fs::create_symlink(tree.top() / "nested" / "big.bin", tree.top() / "big_link", ec);
+    CHECK(!ec);
+    fs::create_directory_symlink(tree.top(), tree.top() / "self_loop", ec);
+    CHECK(!ec);
+
+    BigFileScanOptions options;
+    options.root = tree.top();
+    options.minSizeBytes = 500;
+
+    const std::vector<BigFile> files = findBigFiles(options);
+    CHECK_EQ(files.size(), 1u); // just the real big.bin, once
+}
+
+void testBigFilesCancellation() {
+    SizedTree tree;
+
+    BigFileScanOptions options;
+    options.root = tree.top();
+    options.minSizeBytes = 1;
+
+    std::atomic<bool> cancelled{true}; // cancelled before it starts
+    const std::vector<BigFile> files = findBigFiles(options, &cancelled);
+    CHECK(files.empty());
+}
+
+void testParseSizeSpec() {
+    std::uintmax_t bytes = 0;
+    CHECK(parseSizeSpec("500M", bytes));
+    CHECK_EQ(bytes, 500ull << 20);
+    CHECK(parseSizeSpec("1.5G", bytes));
+    CHECK_EQ(bytes, (3ull << 30) / 2);
+    CHECK(parseSizeSpec("200K", bytes));
+    CHECK_EQ(bytes, 200ull << 10);
+    CHECK(parseSizeSpec("12345", bytes));
+    CHECK_EQ(bytes, 12345u);
+    CHECK(parseSizeSpec("2TB", bytes));
+    CHECK_EQ(bytes, 2ull << 40);
+    CHECK(parseSizeSpec("100mb", bytes));
+    CHECK_EQ(bytes, 100ull << 20);
+
+    CHECK(!parseSizeSpec("", bytes));
+    CHECK(!parseSizeSpec("abc", bytes));
+    CHECK(!parseSizeSpec("10X", bytes));
+    CHECK(!parseSizeSpec("-5M", bytes));
+    CHECK(!parseSizeSpec("10MBs", bytes));
+}
+
+void testCliParsesBigFiles() {
+    CliParseError error;
+    const char* argv[] = {"mac_cleaner", "bigfiles", "--under=/tmp", "--min=500M", "--top=25"};
+    const auto options = parseArgs(5, const_cast<char**>(argv), error);
+    CHECK(options.has_value());
+    CHECK(options->command == Command::BigFiles);
+    CHECK(options->under == "/tmp");
+    CHECK_EQ(options->minSizeBytes, 500ull << 20);
+    CHECK_EQ(options->top, 25u);
+}
+
 void testCliDefaultsToScan() {
     CliParseError error;
     const auto options = parse({"mac_cleaner"}, error);
@@ -537,6 +638,12 @@ int main() {
     testCleanPermanentRemovesEntries();
     testTrashCategoryForcesPermanentDelete();
 
+    testBigFilesFindsAndSortsAboveThreshold();
+    testBigFilesHonoursTopCap();
+    testBigFilesIgnoresSymlinks();
+    testBigFilesCancellation();
+    testParseSizeSpec();
+
     testCliDefaultsToScan();
     testCliParsesCleanFlags();
     testCliParsesOnlyList();
@@ -544,6 +651,7 @@ int main() {
     testCliRejectsUnknownFlag();
     testCliRejectsPermanentWithoutApply();
     testCliHelpShortCircuits();
+    testCliParsesBigFiles();
 
     if (g_failures == 0) {
         std::cout << "All tests passed.\n";

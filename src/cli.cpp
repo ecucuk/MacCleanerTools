@@ -1,6 +1,9 @@
 #include "maccleaner/cli.hpp"
 
+#include "maccleaner/bigfiles.hpp" // parseSizeSpec
+
 #include <array>
+#include <cstdlib>
 #include <iostream>
 #include <optional>
 #include <string_view>
@@ -56,13 +59,15 @@ void printUsage() {
         "Usage:\n"
         "  mac_cleaner scan [--only=<categories>]\n"
         "  mac_cleaner clean [--only=<categories>] [--apply] [--permanent] [--yes]\n"
+        "  mac_cleaner bigfiles [--under=<path>] [--min=<size>] [--top=<n>]\n"
         "\n"
         "Commands:\n"
-        "  scan   Report what would be cleaned and how much space it would free (default).\n"
-        "  clean  Same as scan, but without --apply it is still a dry run. Pass --apply to\n"
-        "         actually remove items (moved to Trash by default).\n"
+        "  scan      Report what would be cleaned and how much space it would free (default).\n"
+        "  clean     Same as scan, but without --apply it is still a dry run. Pass --apply to\n"
+        "            actually remove items (moved to Trash by default).\n"
+        "  bigfiles  List the largest files under a directory (default: your home).\n"
         "\n"
-        "Options:\n"
+        "Options (scan/clean):\n"
         "  --only=<categories>  Comma-separated subset, e.g. --only=caches,derived-data\n"
         "                        Categories: caches, logs, diagnostics, derived-data,\n"
         "                        xcode-archives, device-support, simulator, homebrew,\n"
@@ -70,6 +75,12 @@ void printUsage() {
         "  --apply               Actually perform deletions (clean command only).\n"
         "  --permanent            Delete permanently instead of moving to Trash. Requires --apply.\n"
         "  --yes                  Skip the interactive confirmation prompt.\n"
+        "\n"
+        "Options (bigfiles):\n"
+        "  --under=<path>        Search root (default: home directory).\n"
+        "  --min=<size>          Minimum file size, e.g. 500M, 1.5G, 200K (default: 100M).\n"
+        "  --top=<n>             Show at most n files (default: 100).\n"
+        "\n"
         "  --help                 Show this message.\n";
 }
 
@@ -79,8 +90,10 @@ std::optional<CliOptions> parseArgs(int argc, char** argv, CliParseError& error)
     std::vector<std::string_view> args(argv + (argc > 0 ? 1 : 0), argv + argc);
 
     std::size_t index = 0;
-    if (!args.empty() && (args[0] == "scan" || args[0] == "clean")) {
-        options.command = (args[0] == "scan") ? Command::Scan : Command::Clean;
+    if (!args.empty() && (args[0] == "scan" || args[0] == "clean" || args[0] == "bigfiles")) {
+        options.command = (args[0] == "scan")  ? Command::Scan
+                          : (args[0] == "clean") ? Command::Clean
+                                                  : Command::BigFiles;
         index = 1;
     }
 
@@ -106,6 +119,27 @@ std::optional<CliOptions> parseArgs(int argc, char** argv, CliParseError& error)
                     return std::nullopt;
                 }
             }
+        } else if (arg.rfind("--under=", 0) == 0) {
+            options.under = std::string(arg.substr(std::string_view("--under=").size()));
+            if (options.under.empty()) {
+                error.message = "--under needs a path";
+                return std::nullopt;
+            }
+        } else if (arg.rfind("--min=", 0) == 0) {
+            const std::string spec(arg.substr(std::string_view("--min=").size()));
+            if (!parseSizeSpec(spec, options.minSizeBytes) || options.minSizeBytes == 0) {
+                error.message = "cannot parse size: " + spec + " (try 500M, 1.5G, 200K)";
+                return std::nullopt;
+            }
+        } else if (arg.rfind("--top=", 0) == 0) {
+            const std::string spec(arg.substr(std::string_view("--top=").size()));
+            char* end = nullptr;
+            const unsigned long long parsed = std::strtoull(spec.c_str(), &end, 10);
+            if (end == spec.c_str() || *end != '\0' || parsed == 0) {
+                error.message = "--top needs a positive integer";
+                return std::nullopt;
+            }
+            options.top = static_cast<std::size_t>(parsed);
         } else {
             error.message = "unrecognized argument: " + std::string(arg);
             return std::nullopt;

@@ -498,6 +498,32 @@ void testBigFilesIgnoresSymlinks() {
     CHECK_EQ(files.size(), 1u); // just the real big.bin, once
 }
 
+void testBigFilesStreamsResults() {
+    SizedTree tree;
+
+    BigFileScanOptions options;
+    options.root = tree.top();
+    options.minSizeBytes = 1;
+
+    // Every insertion into the running top list must be observable, and the
+    // last streamed snapshot must equal the final return value -- that is
+    // the contract the GUI's live table depends on.
+    std::size_t calls = 0;
+    std::vector<BigFile> lastSnapshot;
+    const std::vector<BigFile> files = findBigFiles(
+        options, nullptr, {}, [&](const std::vector<BigFile>& current) {
+            ++calls;
+            lastSnapshot = current;
+        });
+
+    CHECK_EQ(calls, 3u); // one per qualifying file
+    CHECK_EQ(lastSnapshot.size(), files.size());
+    for (std::size_t i = 0; i < files.size(); ++i) {
+        CHECK(lastSnapshot[i].path == files[i].path);
+        CHECK_EQ(lastSnapshot[i].sizeBytes, files[i].sizeBytes);
+    }
+}
+
 void testBigFilesCancellation() {
     SizedTree tree;
 
@@ -641,6 +667,7 @@ int main() {
     testBigFilesFindsAndSortsAboveThreshold();
     testBigFilesHonoursTopCap();
     testBigFilesIgnoresSymlinks();
+    testBigFilesStreamsResults();
     testBigFilesCancellation();
     testParseSizeSpec();
 

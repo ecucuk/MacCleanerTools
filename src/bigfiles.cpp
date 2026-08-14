@@ -14,7 +14,8 @@ namespace fs = std::filesystem;
 
 std::vector<BigFile> findBigFiles(const BigFileScanOptions& options,
                                    const std::atomic<bool>* cancelled,
-                                   const BigFileProgress& progress) {
+                                   const BigFileProgress& progress,
+                                   const BigFileResults& onResults) {
     std::vector<BigFile> results; // kept sorted descending; worst element last
 
     auto isCancelled = [cancelled] {
@@ -35,6 +36,9 @@ std::vector<BigFile> findBigFiles(const BigFileScanOptions& options,
         results.insert(pos, std::move(candidate));
         if (results.size() > options.maxResults) {
             results.pop_back();
+        }
+        if (onResults) {
+            onResults(results);
         }
     };
 

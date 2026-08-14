@@ -19,13 +19,16 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// Walks `root` off the main thread and reports the largest files found.
 /// `progress` is throttled (~4 Hz) and delivered on main with the number of
-/// entries visited and the directory currently being walked; `completion`
-/// runs on main with the results sorted largest-first. Only one scan can be
-/// in flight; starting a second one while `scanning` is a no-op.
+/// entries visited and the directory currently being walked; `resultsUpdate`
+/// (same throttle) streams the evolving top list so the UI can fill as files
+/// are found; `completion` runs on main with the authoritative final list,
+/// sorted largest-first. Only one scan can be in flight; starting a second
+/// one while `scanning` is a no-op.
 - (void)scanUnder:(NSString *)root
       minSizeBytes:(unsigned long long)minSizeBytes
         maxResults:(NSUInteger)maxResults
           progress:(nullable void (^)(uint64_t visited, NSString *currentDir))progress
+     resultsUpdate:(nullable void (^)(NSArray<MCBigFileItem *> *files))resultsUpdate
         completion:(void (^)(NSArray<MCBigFileItem *> *files))completion;
 
 /// Asks a running scan to stop; its completion still fires (with whatever was

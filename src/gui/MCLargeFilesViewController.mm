@@ -67,6 +67,11 @@ constexpr NSUInteger kMaxResults = 200;
 @property(nonatomic, copy) NSString *scanRoot;      // the root of the *displayed* results
 @property(nonatomic, copy) NSString *pendingRoot;   // what the picker shows / next scan uses
 
+// Live scan state, composed into one status line by -refreshScanStatus so
+// the walk-progress and found-files callbacks don't fight over the label.
+@property(nonatomic) uint64_t scanVisited;
+@property(nonatomic, copy, nullable) NSString *scanCurrentDir;
+
 @property(nonatomic, strong) NSTextField *rootLabel;
 @property(nonatomic, strong) NSPopUpButton *thresholdPopUp;
 @property(nonatomic, strong) NSButton *chooseButton;
@@ -110,6 +115,11 @@ constexpr NSUInteger kMaxResults = 200;
     self.rootLabel.toolTip = self.pendingRoot;
     [self.rootLabel setContentHuggingPriority:NSLayoutPriorityDefaultLow
                                 forOrientation:NSLayoutConstraintOrientationHorizontal];
+    // Compressible, so a deep path truncates in the middle instead of forcing
+    // the window wider -- Auto Layout grows the *window* to satisfy a label's
+    // intrinsic width if nothing in the chain may compress.
+    [self.rootLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                              forOrientation:NSLayoutConstraintOrientationHorizontal];
 
     self.chooseButton = [NSButton buttonWithTitle:@"Choose…" target:self action:@selector(chooseRoot:)];
     self.chooseButton.bezelStyle = NSBezelStyleRounded;
@@ -187,6 +197,13 @@ constexpr NSUInteger kMaxResults = 200;
     self.placeholderLabel.alignment = NSTextAlignmentCenter;
     self.placeholderLabel.textColor = NSColor.secondaryLabelColor;
     self.placeholderLabel.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
+    // A long filename in the placeholder must wrap inside the pane, never
+    // stretch the pane (and with it the window) to the text's full width.
+    self.placeholderLabel.preferredMaxLayoutWidth = 176;
+    self.placeholderLabel.maximumNumberOfLines = 4;
+    self.placeholderLabel.cell.truncatesLastVisibleLine = YES;
+    [self.placeholderLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                                     forOrientation:NSLayoutConstraintOrientationHorizontal];
 
     self.placeholderStack = [NSStackView stackViewWithViews:@[ self.placeholderIcon, self.placeholderLabel ]];
     self.placeholderStack.orientation = NSUserInterfaceLayoutOrientationVertical;
@@ -229,6 +246,10 @@ constexpr NSUInteger kMaxResults = 200;
     self.statusLabel = [NSTextField labelWithString:@"Choose a folder and press Scan."];
     self.statusLabel.textColor = NSColor.secondaryLabelColor;
     self.statusLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
+    // The scan status carries an ever-changing directory path; it must
+    // truncate, not resize the window ~4x a second (see rootLabel above).
+    [self.statusLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+                                                forOrientation:NSLayoutConstraintOrientationHorizontal];
 
     self.quickLookButton = [NSButton buttonWithTitle:@"Quick Look" target:self action:@selector(togglePreviewPanel:)];
     self.quickLookButton.bezelStyle = NSBezelStyleRounded;
@@ -328,6 +349,15 @@ constexpr NSUInteger kMaxResults = 200;
     [self.spinner startAnimation:nil];
     self.statusLabel.stringValue = @"Scanning…";
 
+    // The table fills as the walk finds qualifying files; scanRoot is set up
+    // front so actions on streamed rows (reveal, even trash) already have the
+    // right allowlist root.
+    self.scanRoot = root;
+    self.items = @[];
+    self.scanVisited = 0;
+    self.scanCurrentDir = nil;
+    [self.tableView reloadData];
+
     __weak MCLargeFilesViewController *weakSelf = self;
     [self.model scanUnder:root
               minSizeBytes:minSize
@@ -337,11 +367,13 @@ constexpr NSUInteger kMaxResults = 200;
                       if (strongSelf == nil) {
                           return;
                       }
-                      strongSelf.statusLabel.stringValue =
-                          [NSString stringWithFormat:@"Scanning… %llu entries · %@",
-                                                      (unsigned long long)visited,
-                                                      [strongSelf displayPath:currentDir]];
+                      strongSelf.scanVisited = visited;
+                      strongSelf.scanCurrentDir = currentDir;
+                      [strongSelf refreshScanStatus];
                   }
+             resultsUpdate:^(NSArray<MCBigFileItem *> *files) {
+                 [weakSelf applyStreamedItems:files];
+             }
                 completion:^(NSArray<MCBigFileItem *> *files) {
                     MCLargeFilesViewController *strongSelf = weakSelf;
                     if (strongSelf == nil) {
@@ -368,6 +400,50 @@ constexpr NSUInteger kMaxResults = 200;
                     [strongSelf updateActionButtons];
                     [strongSelf updatePreview];
                 }];
+}
+
+/// Streams a mid-scan snapshot into the table. Selection is preserved by
+/// path -- rows shift as bigger files displace smaller ones, and losing the
+/// user's selection (or restarting their Quick Look preview) four times a
+/// second would make the streaming worse than useless.
+- (void)applyStreamedItems:(NSArray<MCBigFileItem *> *)files {
+    NSMutableSet<NSString *> *selectedPaths = [NSMutableSet set];
+    for (MCBigFileItem *item in [self selectedItems]) {
+        [selectedPaths addObject:item.path];
+    }
+
+    self.items = files;
+    [self.tableView reloadData];
+
+    if (selectedPaths.count > 0) {
+        NSMutableIndexSet *toSelect = [NSMutableIndexSet indexSet];
+        [files enumerateObjectsUsingBlock:^(MCBigFileItem *item, NSUInteger index, BOOL *) {
+            if ([selectedPaths containsObject:item.path]) {
+                [toSelect addIndex:index];
+            }
+        }];
+        // Re-selecting fires tableViewSelectionDidChange, which keeps the
+        // inline preview and an open Quick Look panel in sync; the
+        // previewedPath guard stops a playing video from restarting.
+        [self.tableView selectRowIndexes:toSelect byExtendingSelection:NO];
+    }
+
+    [self refreshScanStatus];
+}
+
+- (void)refreshScanStatus {
+    if (!self.model.scanning) {
+        return; // completion owns the final status line
+    }
+    unsigned long long total = 0;
+    for (MCBigFileItem *item in self.items) {
+        total += item.sizeBytes;
+    }
+    NSString *where = self.scanCurrentDir != nil ? [self displayPath:self.scanCurrentDir] : @"";
+    self.statusLabel.stringValue =
+        [NSString stringWithFormat:@"Scanning… %llu entries · %lu found · %@ · %@",
+                                    (unsigned long long)self.scanVisited,
+                                    (unsigned long)self.items.count, humanSize(total), where];
 }
 
 - (NSArray<MCBigFileItem *> *)selectedItems {

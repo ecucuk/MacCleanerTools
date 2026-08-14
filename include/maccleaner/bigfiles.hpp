@@ -28,6 +28,13 @@ struct BigFileScanOptions {
 // safe to marshal to a UI queue.
 using BigFileProgress = std::function<void(std::uint64_t visited, const std::filesystem::path& currentDir)>;
 
+// Called from the scanning thread every time the running top-N list changes
+// (a qualifying file was inserted, possibly evicting the smallest). The
+// vector is the *current* result set, sorted descending -- a UI can stream
+// it straight into its table. Bursty in file-dense directories; throttle on
+// the receiving side before marshalling anywhere expensive.
+using BigFileResults = std::function<void(const std::vector<BigFile>& currentResults)>;
+
 // Walks `options.root` and returns the largest regular files found, sorted
 // by size descending, at most `options.maxResults` of them.
 //
@@ -50,10 +57,12 @@ using BigFileProgress = std::function<void(std::uint64_t visited, const std::fil
 //
 // `cancelled` (optional) is checked frequently; when it flips to true the
 // scan returns early with whatever it has collected so far. `progress`
-// (optional) reports liveness for UIs.
+// (optional) reports liveness for UIs; `onResults` (optional) streams the
+// evolving result list so found files can be shown before the walk ends.
 std::vector<BigFile> findBigFiles(const BigFileScanOptions& options,
                                    const std::atomic<bool>* cancelled = nullptr,
-                                   const BigFileProgress& progress = {});
+                                   const BigFileProgress& progress = {},
+                                   const BigFileResults& onResults = {});
 
 // Parses a human size like "500M", "1.5G", "200000" (bytes), suffixes
 // K/M/G/T, 1024-based, case-insensitive. Returns false on garbage.

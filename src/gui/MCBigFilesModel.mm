@@ -58,6 +58,7 @@ NSString *toNSString(const std::string &value) {
       minSizeBytes:(unsigned long long)minSizeBytes
         maxResults:(NSUInteger)maxResults
           progress:(nullable void (^)(uint64_t, NSString *))progress
+     resultsUpdate:(nullable void (^)(NSArray<MCBigFileItem *> *))resultsUpdate
         completion:(void (^)(NSArray<MCBigFileItem *> *))completion {
     if (self.scanning) {
         return;
@@ -95,7 +96,29 @@ NSString *toNSString(const std::string &value) {
             };
         }
 
-        const std::vector<BigFile> found = findBigFiles(options, &self->_cancelled, progressThunk);
+        // Same throttle pattern for the streamed result list. The snapshot is
+        // converted to ObjC objects on the work thread (the vector reference
+        // is only valid during the synchronous callback), then handed to main.
+        BigFileResults resultsThunk;
+        if (resultsUpdate != nil) {
+            resultsThunk = [resultsUpdate, lastPush = CFAbsoluteTime(0)](
+                               const std::vector<BigFile> &current) mutable {
+                const CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+                if (now - lastPush < 0.25) {
+                    return;
+                }
+                lastPush = now;
+                NSMutableArray<MCBigFileItem *> *snapshot = [NSMutableArray arrayWithCapacity:current.size()];
+                for (const BigFile &file : current) {
+                    [snapshot addObject:[[MCBigFileItem alloc] initWithBigFile:file]];
+                }
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    resultsUpdate(snapshot);
+                });
+            };
+        }
+
+        const std::vector<BigFile> found = findBigFiles(options, &self->_cancelled, progressThunk, resultsThunk);
 
         NSMutableArray<MCBigFileItem *> *items = [NSMutableArray arrayWithCapacity:found.size()];
         for (const BigFile &file : found) {

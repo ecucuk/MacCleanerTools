@@ -37,17 +37,24 @@ struct FileEntry {
     bool isDirectory = false;
 };
 
-// Where a category's candidates come from and how finely we enumerate them.
-enum class Granularity {
-    WholeRoot,      // the root itself is the one deletable unit (e.g. ~/.Trash contents are files)
-    DirectChildren, // each direct child of the root is its own deletable unit
-};
-
+// A category's deletable units are always the *direct children* of its root,
+// never the root itself. This isn't a stylistic choice: safety::isSafeToDelete
+// only accepts strict descendants of an allowlisted root, so a "delete the root
+// itself" mode could never actually pass the safety check -- it would scan
+// something and then unconditionally skip it at clean time. Categories whose
+// root should end up empty (e.g. Trash) express that by deleting every child.
 struct ScanTarget {
     Category category;
     std::string label;
     std::filesystem::path root;
-    Granularity granularity = Granularity::DirectChildren;
+
+    // Roots of *other* targets that live underneath this one, e.g.
+    // ~/Library/Caches/Homebrew under ~/Library/Caches. Those subtrees belong
+    // to their own category: this target must neither count their bytes (it
+    // would double-count the grand total) nor offer them for deletion (cleaning
+    // "caches" would silently wipe the Homebrew/Yarn/pip caches that the user
+    // did not select). Populated by defaultTargets(); see resolveExclusions().
+    std::vector<std::filesystem::path> exclusions;
 };
 
 struct ScanResult {

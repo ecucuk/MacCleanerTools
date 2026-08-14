@@ -8,9 +8,17 @@ namespace maccleaner {
 
 namespace fs = std::filesystem;
 
+bool requiresPermanentDelete(Category category) {
+    return category == Category::Trash;
+}
+
 CleanReport clean(const ScanResult& result, const safety::AllowedRoots& allowed, const CleanOptions& options) {
     CleanReport report;
     report.outcomes.reserve(result.entries.size());
+
+    // Emptying the Trash is the one case where "move to Trash" is a no-op that
+    // reclaims nothing, so the mode is forced regardless of what was requested.
+    const DeleteMode mode = requiresPermanentDelete(result.category) ? DeleteMode::Permanent : options.mode;
 
     for (const FileEntry& entry : result.entries) {
         CleanOutcome outcome;
@@ -34,10 +42,13 @@ CleanReport clean(const ScanResult& result, const safety::AllowedRoots& allowed,
             continue;
         }
 
-        if (options.mode == DeleteMode::Trash) {
+        if (mode == DeleteMode::Trash) {
             std::string error;
             outcome.succeeded = trash::moveToTrash(entry.path, error);
-            outcome.message = outcome.succeeded ? "moved to Trash" : error;
+            // Only the native backend actually moves to the Trash; the fallback
+            // removes outright, so don't report it as recoverable (see trash.hpp).
+            const char* const verb = trash::isNativeImplementation() ? "moved to Trash" : "permanently deleted";
+            outcome.message = outcome.succeeded ? verb : error;
         } else {
             std::error_code ec;
             const std::uintmax_t removed = fs::remove_all(entry.path, ec);

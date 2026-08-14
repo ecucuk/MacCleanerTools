@@ -19,7 +19,12 @@ bool moveToTrash(const std::filesystem::path& path, std::string& error) {
             return false;
         }
 
-        NSURL* url = [NSURL fileURLWithPath:nsPath isDirectory:NO];
+        // The single-argument form stats the path to determine directory-ness.
+        // Passing isDirectory: explicitly would mean hardcoding one answer for
+        // entries that are a mix of files and directories (a cache root holds
+        // both), producing a URL whose trailing-slash convention contradicts
+        // what is actually on disk.
+        NSURL* url = [NSURL fileURLWithPath:nsPath];
         NSError* nsError = nil;
         NSFileManager* manager = [NSFileManager defaultManager];
 

@@ -99,6 +99,17 @@ bool isSafeToDelete(const fs::path& candidate, const AllowedRoots& allowed, std:
         return reject("refusing to delete a symlink: " + candidate.string());
     }
 
+#ifdef __APPLE__
+    // Defense in depth against SIP-marked inodes: the scanner already filters
+    // these out (along with TCC-protected dirs, which carry no flags at all
+    // and are only detectable by probing -- see isSystemProtected in
+    // scanner.cpp), but a candidate arriving through some other route is
+    // still rejected here.
+    if ((lst.st_flags & (UF_DATAVAULT | SF_RESTRICTED)) != 0) {
+        return reject("protected by macOS (SIP data vault / restricted flag): " + candidate.string());
+    }
+#endif
+
     const fs::path resolved = fs::weakly_canonical(candidate, ec);
     if (ec) {
         return reject("failed to resolve path: " + ec.message());

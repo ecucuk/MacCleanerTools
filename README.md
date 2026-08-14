@@ -64,7 +64,10 @@ confirm.
 mid-scan — a cold whole-home walk is I/O-bound and can take minutes.
 Results support Reveal in Finder (double-click too) and Move to Trash;
 deletion re-validates every path through the same safety layer, with the
-chosen search root as the only allowed root.
+chosen search root as the only allowed root. Selecting a photo, video or
+audio file shows a Quick Look preview in the right-hand pane (videos are
+playable); the media gate reads the on-disk content type, so a wrongly
+named file is still recognized.
 
 The GUI's equivalent of the CLI's dry run is the confirmation sheet: nothing
 is touched until you confirm, and the sheet states the item count and total

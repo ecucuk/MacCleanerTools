@@ -150,7 +150,12 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
     )
 
     find_library(COCOA_FRAMEWORK Cocoa REQUIRED)
-    target_link_libraries(MacCleaner PRIVATE ${COCOA_FRAMEWORK})
+    # Quartz supplies QLPreviewView (the Large Files media preview);
+    # UniformTypeIdentifiers supplies the UTType media gate in front of it.
+    find_library(QUARTZ_FRAMEWORK Quartz REQUIRED)
+    find_library(UTTYPE_FRAMEWORK UniformTypeIdentifiers REQUIRED)
+    target_link_libraries(MacCleaner PRIVATE
+        ${COCOA_FRAMEWORK} ${QUARTZ_FRAMEWORK} ${UTTYPE_FRAMEWORK})
 
     target_compile_options(MacCleaner PRIVATE -fobjc-arc)
 

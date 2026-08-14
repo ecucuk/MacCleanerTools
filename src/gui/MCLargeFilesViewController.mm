@@ -2,6 +2,12 @@
 
 #import "MCBigFilesModel.h"
 
+// Quartz brings QLPreviewView: one view that renders what Finder's Quick
+// Look renders (HEIC/RAW images, video with playback controls, audio),
+// far beyond what a hand-rolled NSImageView + AVPlayerView pair would cover.
+#import <Quartz/Quartz.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+
 #include "maccleaner/format.hpp"
 
 namespace {
@@ -49,6 +55,14 @@ constexpr NSUInteger kMaxResults = 200;
 @property(nonatomic, strong) NSTableView *tableView;
 @property(nonatomic, strong) NSButton *revealButton;
 @property(nonatomic, strong) NSButton *trashButton;
+
+// Preview pane: Quick Look for media/photo selections, a placeholder
+// (icon + caption) for everything else.
+@property(nonatomic, strong) QLPreviewView *previewView;
+@property(nonatomic, strong) NSStackView *placeholderStack;
+@property(nonatomic, strong) NSImageView *placeholderIcon;
+@property(nonatomic, strong) NSTextField *placeholderLabel;
+@property(nonatomic, copy, nullable) NSString *previewedPath;
 
 @end
 
@@ -132,7 +146,62 @@ constexpr NSUInteger kMaxResults = 200;
     scrollView.hasVerticalScroller = YES;
     scrollView.autohidesScrollers = YES;
     scrollView.borderType = NSBezelBorder;
-    scrollView.translatesAutoresizingMaskIntoConstraints = NO;
+
+    // --- preview pane ----------------------------------------------------
+    self.previewView = [[QLPreviewView alloc] initWithFrame:NSZeroRect
+                                                       style:QLPreviewViewStyleNormal];
+    self.previewView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.previewView.hidden = YES;
+
+    self.placeholderIcon = [[NSImageView alloc] initWithFrame:NSZeroRect];
+    self.placeholderIcon.translatesAutoresizingMaskIntoConstraints = NO;
+    self.placeholderIcon.image = [NSImage imageWithSystemSymbolName:@"photo.on.rectangle.angled"
+                                            accessibilityDescription:@"No preview"];
+    self.placeholderIcon.symbolConfiguration =
+        [NSImageSymbolConfiguration configurationWithPointSize:44 weight:NSFontWeightLight];
+    self.placeholderIcon.contentTintColor = NSColor.tertiaryLabelColor;
+
+    self.placeholderLabel = [NSTextField wrappingLabelWithString:@"Select a media or photo file to preview it."];
+    self.placeholderLabel.alignment = NSTextAlignmentCenter;
+    self.placeholderLabel.textColor = NSColor.secondaryLabelColor;
+    self.placeholderLabel.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
+
+    self.placeholderStack = [NSStackView stackViewWithViews:@[ self.placeholderIcon, self.placeholderLabel ]];
+    self.placeholderStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    self.placeholderStack.alignment = NSLayoutAttributeCenterX;
+    self.placeholderStack.spacing = 10;
+    self.placeholderStack.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSView *previewContainer = [[NSView alloc] initWithFrame:NSZeroRect];
+    [previewContainer addSubview:self.previewView];
+    [previewContainer addSubview:self.placeholderStack];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.previewView.topAnchor constraintEqualToAnchor:previewContainer.topAnchor],
+        [self.previewView.bottomAnchor constraintEqualToAnchor:previewContainer.bottomAnchor],
+        [self.previewView.leadingAnchor constraintEqualToAnchor:previewContainer.leadingAnchor],
+        [self.previewView.trailingAnchor constraintEqualToAnchor:previewContainer.trailingAnchor],
+        [self.placeholderStack.centerXAnchor constraintEqualToAnchor:previewContainer.centerXAnchor],
+        [self.placeholderStack.centerYAnchor constraintEqualToAnchor:previewContainer.centerYAnchor],
+        [self.placeholderStack.leadingAnchor
+            constraintGreaterThanOrEqualToAnchor:previewContainer.leadingAnchor constant:12],
+        [self.placeholderStack.trailingAnchor
+            constraintLessThanOrEqualToAnchor:previewContainer.trailingAnchor constant:-12],
+    ]];
+
+    NSSplitView *splitView = [[NSSplitView alloc] initWithFrame:NSZeroRect];
+    splitView.vertical = YES;
+    splitView.dividerStyle = NSSplitViewDividerStyleThin;
+    [splitView addArrangedSubview:scrollView];
+    [splitView addArrangedSubview:previewContainer];
+    // The preview holds its width; the table absorbs window resizes. The
+    // divider position survives relaunches via the autosave name.
+    [splitView setHoldingPriority:NSLayoutPriorityDefaultLow + 10 forSubviewAtIndex:1];
+    splitView.autosaveName = @"MCLargeFilesSplit";
+    splitView.translatesAutoresizingMaskIntoConstraints = NO;
+    [NSLayoutConstraint activateConstraints:@[
+        [scrollView.widthAnchor constraintGreaterThanOrEqualToConstant:320],
+        [previewContainer.widthAnchor constraintGreaterThanOrEqualToConstant:200],
+    ]];
 
     // --- bottom bar ------------------------------------------------------
     self.statusLabel = [NSTextField labelWithString:@"Choose a folder and press Scan."];
@@ -159,7 +228,7 @@ constexpr NSUInteger kMaxResults = 200;
     bottomBar.translatesAutoresizingMaskIntoConstraints = NO;
 
     [self.view addSubview:topBar];
-    [self.view addSubview:scrollView];
+    [self.view addSubview:splitView];
     [self.view addSubview:bottomBar];
 
     const CGFloat margin = 16;
@@ -168,15 +237,23 @@ constexpr NSUInteger kMaxResults = 200;
         [topBar.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:margin],
         [topBar.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-margin],
 
-        [scrollView.topAnchor constraintEqualToAnchor:topBar.bottomAnchor constant:12],
-        [scrollView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:margin],
-        [scrollView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-margin],
+        [splitView.topAnchor constraintEqualToAnchor:topBar.bottomAnchor constant:12],
+        [splitView.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:margin],
+        [splitView.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-margin],
 
-        [bottomBar.topAnchor constraintEqualToAnchor:scrollView.bottomAnchor constant:12],
+        [bottomBar.topAnchor constraintEqualToAnchor:splitView.bottomAnchor constant:12],
         [bottomBar.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:margin],
         [bottomBar.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-margin],
         [bottomBar.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor constant:-margin],
     ]];
+
+    [self updatePreview];
+}
+
+- (void)dealloc {
+    // QLPreviewView documents an explicit close to release its resources
+    // (video playback in particular) when the view is going away.
+    [_previewView close];
 }
 
 - (NSString *)displayPath:(NSString *)path {
@@ -262,6 +339,7 @@ constexpr NSUInteger kMaxResults = 200;
                             : [NSString stringWithFormat:@"%lu file(s) · %@ total",
                                                           (unsigned long)files.count, humanSize(total)];
                     [strongSelf updateActionButtons];
+                    [strongSelf updatePreview];
                 }];
 }
 
@@ -340,6 +418,9 @@ constexpr NSUInteger kMaxResults = 200;
     self.items = remaining;
     [self.tableView reloadData];
     [self updateActionButtons];
+    // The previewed file may be the one just trashed; QLPreviewView keeps
+    // videos open, so drop the item rather than previewing a Trash entry.
+    [self updatePreview];
 
     if (problems.count == 0) {
         self.statusLabel.stringValue = [NSString stringWithFormat:@"Moved %lu file(s) to Trash · freed %@",
@@ -361,6 +442,70 @@ constexpr NSUInteger kMaxResults = 200;
     const BOOL hasSelection = self.tableView.selectedRowIndexes.count > 0;
     self.revealButton.enabled = hasSelection;
     self.trashButton.enabled = hasSelection && !self.model.scanning;
+}
+
+#pragma mark - Preview
+
+/// Media/photo gate for the preview pane. Uses the on-disk content type
+/// (which sees through wrong/missing extensions), falling back to the
+/// extension when the file is unreadable. Audio is included: it conforms to
+/// UTTypeAudiovisualContent alongside movies.
+- (BOOL)isPreviewableMediaAtURL:(NSURL *)url {
+    UTType *type = nil;
+    [url getResourceValue:&type forKey:NSURLContentTypeKey error:nil];
+    if (type == nil) {
+        type = [UTType typeWithFilenameExtension:url.pathExtension.lowercaseString];
+    }
+    if (type == nil) {
+        return NO;
+    }
+    return [type conformsToType:UTTypeImage] || [type conformsToType:UTTypeAudiovisualContent];
+}
+
+- (void)showPlaceholder:(NSString *)message {
+    // Clearing the item also stops any in-flight video/audio playback.
+    if (self.previewedPath != nil) {
+        self.previewView.previewItem = nil;
+        self.previewedPath = nil;
+    }
+    self.previewView.hidden = YES;
+    self.placeholderStack.hidden = NO;
+    self.placeholderLabel.stringValue = message;
+}
+
+- (void)updatePreview {
+    NSArray<MCBigFileItem *> *selected = [self selectedItems];
+
+    if (selected.count == 0) {
+        [self showPlaceholder:@"Select a media or photo file to preview it."];
+        return;
+    }
+    if (selected.count > 1) {
+        unsigned long long total = 0;
+        for (MCBigFileItem *item in selected) {
+            total += item.sizeBytes;
+        }
+        [self showPlaceholder:[NSString stringWithFormat:@"%lu files selected · %@",
+                                                          (unsigned long)selected.count, humanSize(total)]];
+        return;
+    }
+
+    MCBigFileItem *item = selected.firstObject;
+    NSURL *url = [NSURL fileURLWithPath:item.path];
+    if (![self isPreviewableMediaAtURL:url]) {
+        [self showPlaceholder:[NSString stringWithFormat:@"%@\n%@ · no media preview",
+                                                          item.name, humanSize(item.sizeBytes)]];
+        return;
+    }
+
+    if ([self.previewedPath isEqualToString:item.path]) {
+        return; // same file re-selected; don't restart a playing video
+    }
+    self.previewedPath = item.path;
+    self.placeholderStack.hidden = YES;
+    self.previewView.hidden = NO;
+    // NSURL conforms to QLPreviewItem, so the URL itself is the item.
+    self.previewView.previewItem = url;
 }
 
 #pragma mark - NSTableViewDataSource / Delegate
@@ -402,6 +547,7 @@ constexpr NSUInteger kMaxResults = 200;
 
 - (void)tableViewSelectionDidChange:(NSNotification *)notification {
     [self updateActionButtons];
+    [self updatePreview];
 }
 
 @end

@@ -1,8 +1,13 @@
 # mac-cleaner
 
-A tool for finding and reclaiming disk space on macOS: application caches,
-logs, Xcode DerivedData/Archives/DeviceSupport, Simulator caches, and
-package-manager caches (Homebrew, npm, Yarn, pip).
+A toolbox for reclaiming disk space on macOS. The app hosts multiple tools
+behind one sidebar:
+
+- **Storage Cleaner** — scan and clean known junk locations: application
+  caches, logs, Xcode DerivedData/Archives/DeviceSupport, Simulator caches,
+  and package-manager caches (Homebrew, npm, Yarn, pip).
+- **Large Files** — walk any directory (default: your home) and list the
+  largest files, with Reveal-in-Finder and Move-to-Trash actions.
 
 Ships as two front ends over one core library (`maccleaner_core`) — a
 `mac_cleaner` CLI and a `MacCleaner.app` AppKit GUI. Scanning, the safety
@@ -11,11 +16,11 @@ numbers and enforce identical rules; neither front end reimplements any of it.
 
 ## Build
 
-Requires a recent Xcode / Command Line Tools (Clang with `std::filesystem`
-and Objective-C++ support) and CMake >= 3.21.
+Requires a recent Xcode / Command Line Tools (Clang with `std::filesystem`,
+Objective-C++ and Swift support), CMake >= 3.21 and Ninja.
 
 ```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build -j
 ```
 
@@ -36,6 +41,8 @@ build/mac_cleaner scan --only=derived-data,npm   # report only, subset
 build/mac_cleaner clean                          # dry run (same as scan, but through the clean path)
 build/mac_cleaner clean --apply                  # actually move items to Trash
 build/mac_cleaner clean --apply --permanent      # skip Trash, remove_all (irreversible)
+build/mac_cleaner bigfiles                       # 100 largest files >= 100 MB under $HOME
+build/mac_cleaner bigfiles --under=~/Movies --min=1G --top=20
 ```
 
 ## Usage — GUI
@@ -44,9 +51,20 @@ build/mac_cleaner clean --apply --permanent      # skip Trash, remove_all (irrev
 open build/MacCleaner.app
 ```
 
-A single window listing each non-empty category, expandable to the individual
-items underneath it, largest first. Check whole categories or individual
-items, pick **Move to Trash** or **Delete permanently**, and confirm.
+The sidebar on the left switches tools; each tool is a self-contained view
+controller over the shared core (see Extending).
+
+**Storage Cleaner** lists each non-empty category, expandable to the
+individual items underneath it, largest first. Check whole categories or
+individual items, pick **Move to Trash** or **Delete permanently**, and
+confirm.
+
+**Large Files** searches any folder for files at or above a size threshold
+(50 MB – 5 GB presets), streaming progress as it walks and cancellable
+mid-scan — a cold whole-home walk is I/O-bound and can take minutes.
+Results support Reveal in Finder (double-click too) and Move to Trash;
+deletion re-validates every path through the same safety layer, with the
+chosen search root as the only allowed root.
 
 The GUI's equivalent of the CLI's dry run is the confirmation sheet: nothing
 is touched until you confirm, and the sheet states the item count and total
@@ -166,15 +184,26 @@ allowlist-first rather than denylist-first:
 include/maccleaner/   public headers (types, safety, scanner, cleaner, trash, cli, format)
 src/                  core implementation + CLI front end (main.cpp)
 src/platform/         OS-specific Trash backend (trash_mac.mm / trash_fallback.cpp)
-src/gui/              AppKit front end (MCScanModel = core wrapper + threading,
-                      MCMainWindowController = the window, main.mm = NSApplication)
+src/gui/              AppKit front end: MCMainWindowController = sidebar shell,
+                      MCCleanerViewController / MCLargeFilesViewController = tools,
+                      MCScanModel / MCBigFilesModel = core wrappers + threading,
+                      main.mm = NSApplication
+src/gui/viz/          SwiftUI Activity window (own static lib, bridged via
+                      the generated MacCleanerViz-Swift.h)
 cmake/                bundle Info.plist template
 tests/                dependency-free CTest suite
 ```
 
-The GUI adds no dependency beyond the Cocoa system framework and builds from
-the same `cmake --build build`; the UI is constructed in code, so there are no
+The GUI adds no dependency beyond system frameworks and builds from the same
+`cmake --build build`; the UI is constructed in code, so there are no
 xib/storyboard resources to keep in sync.
+
+## Development workflow
+
+`main` is the stable base. Each tool is developed on its own
+`<tool>-develop` branch (e.g. `large-files-develop`) and merged into `main`
+when it holds together; the sidebar shell means a new tool lands as one new
+view controller plus one `MCToolEntry` row in `MCMainWindowController.mm`.
 
 ## Extending
 
@@ -184,6 +213,13 @@ To add a new cleanup category: add an enum value to `Category`
 changes to the safety layer are needed — new roots are picked up
 automatically via `registerAllowedRoots()`, and any nesting against existing
 roots is picked up automatically via `resolveExclusions()`.
+
+To add a new *tool*: put its core logic in the C++ library (own header, own
+tests, ideally a CLI subcommand), wrap threading in a small ObjC model like
+MCBigFilesModel, build the UI as an NSViewController, and register it as an
+MCToolEntry in the shell. If the tool deletes anything, route every path
+through `safety::isSafeToDelete()` with an AllowedRoots scoped to what the
+user actually asked to operate on.
 
 Note that a category's deletable units are always the *direct children* of
 its root, never the root itself: `isSafeToDelete()` only accepts strict

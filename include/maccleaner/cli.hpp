@@ -9,9 +9,10 @@
 namespace maccleaner {
 
 enum class Command {
-    Scan,      // report sizes only (default)
-    Clean,     // scan, then prompt/act according to options
-    BigFiles,  // list the largest files under a root
+    Scan,       // report sizes only (default)
+    Clean,      // scan, then prompt/act according to options
+    BigFiles,   // list the largest files under a root
+    Processes,  // list the current user's processes by CPU/memory
     Help,
 };
 
@@ -26,7 +27,10 @@ struct CliOptions {
     // the defaults from BigFileScanOptions when the flags are absent.
     std::string under;
     std::uintmax_t minSizeBytes = 0; // 0 = use default
-    std::size_t top = 0;             // 0 = use default
+    std::size_t top = 0;             // 0 = use default (also caps `processes` output)
+
+    // processes options.
+    std::string sortKey; // "cpu" (default) or "mem"
 };
 
 struct CliParseError {

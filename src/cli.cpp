@@ -60,12 +60,14 @@ void printUsage() {
         "  mac_cleaner scan [--only=<categories>]\n"
         "  mac_cleaner clean [--only=<categories>] [--apply] [--permanent] [--yes]\n"
         "  mac_cleaner bigfiles [--under=<path>] [--min=<size>] [--top=<n>]\n"
+        "  mac_cleaner processes [--sort=cpu|mem] [--top=<n>]\n"
         "\n"
         "Commands:\n"
-        "  scan      Report what would be cleaned and how much space it would free (default).\n"
-        "  clean     Same as scan, but without --apply it is still a dry run. Pass --apply to\n"
-        "            actually remove items (moved to Trash by default).\n"
-        "  bigfiles  List the largest files under a directory (default: your home).\n"
+        "  scan       Report what would be cleaned and how much space it would free (default).\n"
+        "  clean      Same as scan, but without --apply it is still a dry run. Pass --apply to\n"
+        "             actually remove items (moved to Trash by default).\n"
+        "  bigfiles   List the largest files under a directory (default: your home).\n"
+        "  processes  List your processes by CPU or memory use (1s sampling window).\n"
         "\n"
         "Options (scan/clean):\n"
         "  --only=<categories>  Comma-separated subset, e.g. --only=caches,derived-data\n"
@@ -81,6 +83,10 @@ void printUsage() {
         "  --min=<size>          Minimum file size, e.g. 500M, 1.5G, 200K (default: 100M).\n"
         "  --top=<n>             Show at most n files (default: 100).\n"
         "\n"
+        "Options (processes):\n"
+        "  --sort=cpu|mem        Sort order (default: cpu).\n"
+        "  --top=<n>             Show at most n processes (default: 20).\n"
+        "\n"
         "  --help                 Show this message.\n";
 }
 
@@ -90,10 +96,12 @@ std::optional<CliOptions> parseArgs(int argc, char** argv, CliParseError& error)
     std::vector<std::string_view> args(argv + (argc > 0 ? 1 : 0), argv + argc);
 
     std::size_t index = 0;
-    if (!args.empty() && (args[0] == "scan" || args[0] == "clean" || args[0] == "bigfiles")) {
-        options.command = (args[0] == "scan")  ? Command::Scan
-                          : (args[0] == "clean") ? Command::Clean
-                                                  : Command::BigFiles;
+    if (!args.empty() &&
+        (args[0] == "scan" || args[0] == "clean" || args[0] == "bigfiles" || args[0] == "processes")) {
+        options.command = (args[0] == "scan")      ? Command::Scan
+                          : (args[0] == "clean")    ? Command::Clean
+                          : (args[0] == "bigfiles") ? Command::BigFiles
+                                                     : Command::Processes;
         index = 1;
     }
 
@@ -131,6 +139,13 @@ std::optional<CliOptions> parseArgs(int argc, char** argv, CliParseError& error)
                 error.message = "cannot parse size: " + spec + " (try 500M, 1.5G, 200K)";
                 return std::nullopt;
             }
+        } else if (arg.rfind("--sort=", 0) == 0) {
+            const std::string key(arg.substr(std::string_view("--sort=").size()));
+            if (key != "cpu" && key != "mem") {
+                error.message = "--sort must be cpu or mem, got: " + key;
+                return std::nullopt;
+            }
+            options.sortKey = key;
         } else if (arg.rfind("--top=", 0) == 0) {
             const std::string spec(arg.substr(std::string_view("--top=").size()));
             char* end = nullptr;

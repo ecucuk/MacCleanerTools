@@ -43,6 +43,7 @@ set(MACCLEANER_CORE_SOURCES
     src/scanner.cpp
     src/cleaner.cpp
     src/bigfiles.cpp
+    src/processes.cpp
     src/cli.cpp
 )
 
@@ -125,9 +126,11 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
         src/gui/main.mm
         src/gui/MCScanModel.mm
         src/gui/MCBigFilesModel.mm
+        src/gui/MCProcessModel.mm
         src/gui/MCMainWindowController.mm
         src/gui/MCCleanerViewController.mm
         src/gui/MCLargeFilesViewController.mm
+        src/gui/MCPerformanceViewController.mm
         src/gui/MCUsageSummaryView.mm
         "${MACCLEANER_VIZ_HEADER_STAGED}"
     )

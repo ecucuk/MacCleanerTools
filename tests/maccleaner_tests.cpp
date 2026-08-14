@@ -5,6 +5,7 @@
 
 #include "maccleaner/bigfiles.hpp"
 #include "maccleaner/cleaner.hpp"
+#include "maccleaner/processes.hpp"
 #include "maccleaner/cli.hpp"
 #include "maccleaner/format.hpp"
 #include "maccleaner/safety.hpp"
@@ -16,6 +17,7 @@
 #include <string>
 #include <vector>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 namespace {
@@ -569,6 +571,139 @@ void testCliParsesBigFiles() {
     CHECK_EQ(options->top, 25u);
 }
 
+// --- processes ----------------------------------------------------------
+
+using maccleaner::classifyProcess;
+using maccleaner::diffProcessSamples;
+using maccleaner::isSafeToKill;
+using maccleaner::KillMode;
+using maccleaner::killProcess;
+using maccleaner::ProcessInfo;
+using maccleaner::ProcessKind;
+using maccleaner::ProcessSample;
+using maccleaner::sampleProcesses;
+
+void testClassifyProcess() {
+    CHECK(classifyProcess("/Applications/Safari.app/Contents/MacOS/Safari") == ProcessKind::App);
+    CHECK(classifyProcess("/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder") ==
+          ProcessKind::System);
+    CHECK(classifyProcess("/usr/libexec/secd") == ProcessKind::System);
+    CHECK(classifyProcess("/opt/homebrew/bin/node") == ProcessKind::Background);
+    CHECK(classifyProcess("") == ProcessKind::Background);
+}
+
+void testDiffProcessSamplesComputesCpuPercent() {
+    ProcessSample before;
+    before.pid = 42;
+    before.startTime = 1000;
+    before.cpuTimeNs = 1'000'000'000; // 1s of CPU so far
+
+    ProcessSample after = before;
+    after.cpuTimeNs = 1'500'000'000; // +0.5s CPU ...
+
+    const std::vector<ProcessInfo> infos =
+        diffProcessSamples({before}, {after}, 1'000'000'000); // ... over 1s wall
+    CHECK_EQ(infos.size(), 1u);
+    CHECK(infos[0].cpuPercent > 49.9 && infos[0].cpuPercent < 50.1);
+}
+
+void testDiffProcessSamplesHandlesNewAndReusedPids() {
+    ProcessSample fresh;
+    fresh.pid = 7;
+    fresh.startTime = 2000;
+    fresh.cpuTimeNs = 500'000'000;
+
+    // No baseline: 0%, not garbage.
+    std::vector<ProcessInfo> infos = diffProcessSamples({}, {fresh}, 1'000'000'000);
+    CHECK_EQ(infos.size(), 1u);
+    CHECK_EQ(infos[0].cpuPercent, 0.0);
+
+    // Same pid, different start time = pid reuse; must also get 0%, not a
+    // bogus delta against the dead process's counters.
+    ProcessSample old = fresh;
+    old.startTime = 1000;
+    old.cpuTimeNs = 9'000'000'000;
+    infos = diffProcessSamples({old}, {fresh}, 1'000'000'000);
+    CHECK_EQ(infos.size(), 1u);
+    CHECK_EQ(infos[0].cpuPercent, 0.0);
+}
+
+#ifdef __APPLE__
+void testSampleProcessesSeesOurselves() {
+    const std::vector<ProcessSample> samples = sampleProcesses(::geteuid());
+    const auto self = std::find_if(samples.begin(), samples.end(),
+                                    [](const ProcessSample& s) { return s.pid == ::getpid(); });
+    CHECK(self != samples.end());
+    if (self != samples.end()) {
+        CHECK(!self->name.empty());
+        CHECK(self->memoryBytes > 0);
+        CHECK(self->startTime > 0);
+    }
+}
+#endif
+
+void testIsSafeToKillRejectsProtectedTargets() {
+    std::string reason;
+    CHECK(!isSafeToKill(0, &reason));
+    CHECK(!isSafeToKill(1, &reason));       // launchd: root-owned and pid<=1
+    CHECK(!isSafeToKill(::getpid(), &reason)); // never ourselves
+    CHECK(!reason.empty());
+}
+
+void testIsSafeToKillReportsForeignProcessesAccurately() {
+    // A live root-owned process must be rejected as *someone else's*, not as
+    // "no longer exists": proc_pidinfo fails for both cases, and this reason
+    // string is what the UI shows the user in a tooltip.
+    const pid_t child = ::fork();
+    if (child == 0) {
+        ::execlp("sleep", "sleep", "5", static_cast<char*>(nullptr));
+        _exit(127);
+    }
+    CHECK(child > 0);
+
+    // A pid that genuinely does not exist reports so. Reaping the child
+    // first guarantees the pid is free (barring immediate reuse).
+    std::string error;
+    (void)killProcess(child, KillMode::Force, error);
+    int status = 0;
+    ::waitpid(child, &status, 0);
+
+    std::string reason;
+    CHECK(!isSafeToKill(child, &reason));
+    CHECK(reason == "process no longer exists");
+
+#ifdef __APPLE__
+    // launchd (pid 1) is alive and root-owned; it must never be reported as
+    // gone. pid<=1 short-circuits before the ownership branch, so use the
+    // message to confirm it is the *system process* rule that fired.
+    std::string launchdReason;
+    CHECK(!isSafeToKill(1, &launchdReason));
+    CHECK(launchdReason.find("no longer exists") == std::string::npos);
+#endif
+}
+
+void testKillProcessTerminatesOwnChild() {
+    // A real end-to-end kill against a process we own: spawn a sleeper,
+    // gracefully terminate it, and confirm it died of SIGTERM.
+    const pid_t child = ::fork();
+    if (child == 0) {
+        ::execlp("sleep", "sleep", "30", static_cast<char*>(nullptr));
+        _exit(127); // exec failed
+    }
+    CHECK(child > 0);
+
+    std::string reason;
+    CHECK(isSafeToKill(child, &reason));
+
+    std::string error;
+    CHECK(killProcess(child, KillMode::Graceful, error));
+
+    int status = 0;
+    CHECK_EQ(::waitpid(child, &status, 0), child);
+    CHECK(WIFSIGNALED(status));
+    CHECK_EQ(WTERMSIG(status), SIGTERM);
+}
+
 void testCliDefaultsToScan() {
     CliParseError error;
     const auto options = parse({"mac_cleaner"}, error);
@@ -669,6 +804,16 @@ int main() {
     testBigFilesIgnoresSymlinks();
     testBigFilesStreamsResults();
     testBigFilesCancellation();
+
+    testClassifyProcess();
+    testDiffProcessSamplesComputesCpuPercent();
+    testDiffProcessSamplesHandlesNewAndReusedPids();
+#ifdef __APPLE__
+    testSampleProcessesSeesOurselves();
+#endif
+    testIsSafeToKillRejectsProtectedTargets();
+    testIsSafeToKillReportsForeignProcessesAccurately();
+    testKillProcessTerminatesOwnChild();
     testParseSizeSpec();
 
     testCliDefaultsToScan();

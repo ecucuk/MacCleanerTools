@@ -99,15 +99,30 @@ it is:
 2. **An orphaned renderer** — a Chromium/Electron *role* helper
    (`Foo Helper (Renderer)`, `(GPU)`, `(Plugin)`) whose owning `.app` is no
    longer running. Its app quit and leaked it; it can no longer serve anyone.
-3. **An idle update checker** — a short, explicit list of updater/telemetry
-   agents (Google Keystone, Microsoft AutoUpdate, Adobe CC satellites) that
-   their app or launchd starts again on demand.
+3. **A program that is no longer installed** — its executable is gone from
+   disk, deleted or replaced by an update while the process kept running.
+4. **An idle update checker** — an explicit list of known agents (Google
+   Keystone, Microsoft AutoUpdate, Adobe CC satellites) plus a generic
+   `*Updater` / `*AutoUpdate` / `*UpdateService` name pattern, for the
+   vendors a list will never enumerate.
+5. **An idle helper of a running app** — a Chromium/Electron or WebKit
+   helper over 250 MB that has used essentially no CPU and has been up for
+   at least 15 minutes. This one is **opt-in**: it arrives unchecked,
+   because unlike 1–4 it is alive and reclaiming it costs a reload of
+   whatever it was holding.
 
 And never when it is a **user-facing application** (anything with a Dock
 icon, which may be holding unsaved work), a **login item or launchd agent**,
-this app itself, or anything the [safe-kill guard](#which-processes-can-be-killed)
-rejects. Termination is **SIGTERM only** — the optimizer never escalates to
-SIGKILL on its own.
+**Apple's own system services or XPC services** (the system starts and stops
+those on demand), this app itself, or anything the
+[safe-kill guard](#which-processes-can-be-killed) rejects. Termination is
+**SIGTERM only** — the optimizer never escalates to SIGKILL on its own.
+
+Two of these exclusions exist because the rules misfired on a real machine
+before them: rule 4's generic pattern matched `SetStoreUpdateService`, an
+Apple XPC service under `/System/Library/PrivateFrameworks`, and proposed
+closing five copies of it. "UpdateService" inside an Apple framework does
+not mean what `SomeVendorUpdater` in `/Applications` means.
 
 Rule 2 is restricted to *role* helpers for a reason found the hard way: an
 earlier version matched any nested helper whose owning app was not running,
@@ -122,9 +137,16 @@ that criterion is precisely how cleaner apps end up closing the editor with
 someone's unsaved file in it.
 
 Nothing is signalled until you review it. Clicking Optimize opens a sheet
-listing every proposal with its reason and footprint, all checked, and you
-uncheck anything you would rather keep. On a healthy Mac the honest result
-is usually "nothing to reclaim", and that is what it says.
+listing every proposal with its reason and footprint — rules 1–4 checked,
+rule 5 unchecked — and you decide row by row (or use Select All). When
+there is nothing to reclaim it says so in the status line rather than
+interrupting with a dialog.
+
+CPU is sampled over one second, so a helper that happens to twitch during
+that window reads as busy and is skipped; run Optimize again if you expect
+something that did not appear. `mac_cleaner optimize --apply` acts on the
+recommended rows only — the opt-in ones cost a reload, and a non-interactive
+flag is no place to make that choice for someone.
 
 ### Which processes can be killed
 

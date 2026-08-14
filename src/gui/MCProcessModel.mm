@@ -3,7 +3,9 @@
 #include "maccleaner/optimizer.hpp"
 #include "maccleaner/processes.hpp"
 
+#include <cerrno>
 #include <mach/mach_time.h>
+#include <signal.h>
 #include <unistd.h>
 
 #include <string>
@@ -74,7 +76,11 @@ std::uint64_t nowNs() {
         _kindLabel = [toNSString(toString(candidate.kind)) copy];
         _reason = [toNSString(candidate.reason) copy];
         _reclaimableBytes = candidate.reclaimableBytes;
-        _selected = YES; // proposals start accepted; the user unchecks what they want to keep
+        _recommended = candidate.recommended;
+        // Recommended proposals start accepted; the opt-in ones (a live
+        // helper whose content would reload) start unchecked, so nothing
+        // with a visible cost happens unless the user asks for it.
+        _selected = candidate.recommended;
     }
     return self;
 }
@@ -134,11 +140,18 @@ std::uint64_t nowNs() {
 - (void)findOptimizationCandidatesWithCompletion:
     (void (^)(NSArray<MCOptimizationCandidate *> *))completion {
     dispatch_async(self.workQueue, ^{
-        // A fresh sample rather than the refresh cycle's cached one: the
-        // rules key on process state and parentage, and acting on a snapshot
-        // up to two seconds stale is exactly how you signal the wrong pid.
-        const std::vector<ProcessSample> samples = sampleProcesses(::geteuid());
-        const std::vector<OptimizationCandidate> found = findOptimizationCandidates(samples);
+        // Two fresh samples, not the refresh cycle's cached ones: the rules
+        // key on process state and parentage (stale by up to two seconds is
+        // how you signal the wrong pid), and the idle-helper rule needs a
+        // real CPU percentage, which does not exist without a baseline --
+        // with an empty one every process reads as 0% and looks idle.
+        const std::vector<ProcessSample> before = sampleProcesses(::geteuid());
+        const std::uint64_t startNs = nowNs();
+        [NSThread sleepForTimeInterval:1.0];
+        const std::vector<ProcessSample> after = sampleProcesses(::geteuid());
+        const std::vector<ProcessInfo> infos = diffProcessSamples(before, after, nowNs() - startNs);
+
+        const std::vector<OptimizationCandidate> found = findOptimizationCandidates(infos);
 
         NSMutableArray<MCOptimizationCandidate *> *candidates =
             [NSMutableArray arrayWithCapacity:found.size()];
@@ -150,6 +163,12 @@ std::uint64_t nowNs() {
             completion(candidates);
         });
     });
+}
+
+- (BOOL)processExists:(int)pid {
+    // Signal 0 performs the permission and existence checks without sending
+    // anything. EPERM means it is alive but someone else's -- still alive.
+    return ::kill(pid, 0) == 0 || errno != ESRCH;
 }
 
 - (BOOL)killPid:(int)pid force:(BOOL)force error:(NSString **)error {

@@ -141,30 +141,53 @@ int runProcesses(const CliOptions& options) {
 }
 
 int runOptimize(const CliOptions& options) {
-    const std::vector<ProcessSample> samples = sampleProcesses(::geteuid());
-    const std::vector<OptimizationCandidate> candidates = findOptimizationCandidates(samples);
+    // The idle-helper rule needs a real CPU percentage, which only exists
+    // across two samples; a single snapshot would make every process look
+    // idle and propose the lot.
+    const std::vector<ProcessSample> before = sampleProcesses(::geteuid());
+    const auto start = std::chrono::steady_clock::now();
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    const std::vector<ProcessSample> after = sampleProcesses(::geteuid());
+    const auto wallDeltaNs = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
+
+    const std::vector<ProcessInfo> infos = diffProcessSamples(before, after, wallDeltaNs);
+    const std::vector<OptimizationCandidate> candidates = findOptimizationCandidates(infos);
 
     if (candidates.empty()) {
-        std::cout << "Nothing to reclaim: no orphaned helpers, zombies or idle update agents.\n";
+        std::cout << "Nothing to reclaim.\n";
         return 0;
     }
 
-    std::uintmax_t total = 0;
+    std::uintmax_t recommendedBytes = 0;
+    std::size_t recommendedCount = 0;
     for (const OptimizationCandidate& candidate : candidates) {
-        std::printf("  %10s  %-28s  %s\n", humanReadableBytes(candidate.reclaimableBytes).c_str(),
-                     candidate.sample.name.c_str(), candidate.reason.c_str());
-        total += candidate.reclaimableBytes;
+        std::printf("  %-3s %10s  %-28s  %s\n", candidate.recommended ? "*" : " ",
+                     humanReadableBytes(candidate.reclaimableBytes).c_str(), candidate.sample.name.c_str(),
+                     candidate.reason.c_str());
+        if (candidate.recommended) {
+            recommendedBytes += candidate.reclaimableBytes;
+            ++recommendedCount;
+        }
     }
     std::cout << "================================\n";
-    std::cout << candidates.size() << " process(es), " << humanReadableBytes(total) << " reclaimable\n";
+    std::cout << candidates.size() << " process(es) found; " << recommendedCount << " recommended ("
+               << humanReadableBytes(recommendedBytes) << ")\n";
+    std::cout << "Rows marked * are recommended; the rest are alive and would reload on next use.\n";
 
     if (!options.apply) {
-        std::cout << "\nReport only -- re-run with --apply to terminate these.\n";
+        std::cout << "\nReport only -- re-run with --apply to terminate the recommended ones.\n";
         return 0;
     }
 
+    // --apply acts on the recommended set only. The opt-in rows cost a
+    // reload, and a non-interactive flag is no place to make that choice for
+    // someone; the GUI's review sheet is where they get picked individually.
     std::size_t terminated = 0;
     for (const OptimizationCandidate& candidate : candidates) {
+        if (!candidate.recommended) {
+            continue;
+        }
         std::string error;
         if (killProcess(candidate.sample.pid, KillMode::Graceful, error)) {
             ++terminated;
@@ -172,8 +195,8 @@ int runOptimize(const CliOptions& options) {
             std::cout << "FAIL  " << candidate.sample.name << " — " << error << "\n";
         }
     }
-    std::cout << "Terminated " << terminated << " of " << candidates.size() << ".\n";
-    return terminated == candidates.size() ? 0 : 1;
+    std::cout << "Terminated " << terminated << " of " << recommendedCount << " recommended.\n";
+    return terminated == recommendedCount ? 0 : 1;
 }
 
 int runClean(const CliOptions& options) {

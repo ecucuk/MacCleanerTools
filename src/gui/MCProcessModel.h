@@ -36,7 +36,11 @@ typedef NS_ENUM(NSInteger, MCProcessKind) {
 @property(nonatomic, copy, readonly) NSString *kindLabel; // "Orphaned helper", ...
 @property(nonatomic, copy, readonly) NSString *reason;    // one user-facing line
 @property(nonatomic, readonly) unsigned long long reclaimableBytes;
-/// UI state: candidates start selected, the user may uncheck any of them.
+/// NO for proposals whose cost is a reload (a live helper of a running app).
+/// Those arrive unchecked so the user opts in deliberately.
+@property(nonatomic, readonly) BOOL recommended;
+/// UI state: recommended candidates start selected; the user may check or
+/// uncheck any of them.
 @property(nonatomic) BOOL selected;
 @end
 
@@ -52,6 +56,12 @@ typedef NS_ENUM(NSInteger, MCProcessKind) {
 /// against the same safe-kill rules. Synchronous; returns NO with `error`
 /// set on rejection or failure.
 - (BOOL)killPid:(int)pid force:(BOOL)force error:(NSString *_Nullable *_Nullable)error;
+
+/// YES while `pid` still exists (in any state, including zombie). Used to
+/// tell "the kill failed" apart from "it had already exited by the time we
+/// got there" -- the second is the outcome the user asked for, not an error
+/// to warn them about.
+- (BOOL)processExists:(int)pid;
 
 /// Takes a fresh sample off the main thread and applies the optimizer rules
 /// to it, delivering the proposals on main, largest footprint first. An

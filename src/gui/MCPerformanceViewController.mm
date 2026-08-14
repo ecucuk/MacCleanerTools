@@ -400,19 +400,11 @@ NSString *kindLabel(MCProcessKind kind) {
         strongSelf.optimizeButton.enabled = YES;
 
         if (candidates.count == 0) {
-            // The honest answer, and the common one on a healthy Mac.
-            // Inventing work here is what turns an optimizer into a
-            // placebo -- or worse, into something that closes things that
-            // were doing their job.
-            [strongSelf setStickyStatusMessage:@"Nothing to reclaim."];
-            NSAlert *alert = [[NSAlert alloc] init];
-            alert.alertStyle = NSAlertStyleInformational;
-            alert.messageText = @"Nothing to optimize";
-            alert.informativeText = @"No leftover helpers, finished processes or idle update "
-                                     @"agents were found. Everything running right now is either "
-                                     @"in use or doing its job.";
-            [alert addButtonWithTitle:@"OK"];
-            [alert beginSheetModalForWindow:strongSelf.view.window completionHandler:nil];
+            // The honest answer, and a common one on a healthy Mac. Said in
+            // the status line rather than a dialog: "nothing needed doing"
+            // does not deserve a modal interruption, and inventing work to
+            // fill the gap is what turns an optimizer into a placebo.
+            [strongSelf setStickyStatusMessage:@"Nothing to reclaim — everything running is in use."];
             return;
         }
 
@@ -436,6 +428,12 @@ NSString *kindLabel(MCProcessKind kind) {
         // them shut down properly. The optimizer never escalates to
         // SIGKILL on its own -- that stays a deliberate manual action.
         if ([self.model killPid:candidate.pid force:NO error:&error]) {
+            ++closed;
+            reclaimed += candidate.reclaimableBytes;
+        } else if (![self.model processExists:candidate.pid]) {
+            // It exited on its own between the analysis and the user's
+            // confirmation -- exactly the outcome they asked for. Warning
+            // them that it "could not be closed" would be nonsense.
             ++closed;
             reclaimed += candidate.reclaimableBytes;
         } else {
@@ -558,6 +556,8 @@ NSString *kindLabel(MCProcessKind kind) {
         NSString *error = nil;
         if ([self.model killPid:item.pid force:force error:&error]) {
             ++killed;
+        } else if (![self.model processExists:item.pid]) {
+            ++killed; // already gone: the user's intent, not a failure
         } else {
             [problems addObject:[NSString stringWithFormat:@"%@ — %@", item.name,
                                                             error != nil ? error : @"unknown error"]];

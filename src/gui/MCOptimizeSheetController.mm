@@ -24,6 +24,7 @@ constexpr NSInteger kCheckboxTag = 1;
 @property(nonatomic, copy) void (^onConfirm)(NSArray<MCOptimizationCandidate *> *);
 @property(nonatomic, strong) NSTableView *tableView;
 @property(nonatomic, strong) NSTextField *summaryLabel;
+@property(nonatomic, strong) NSButton *selectAllButton;
 @property(nonatomic, strong) NSButton *confirmButton;
 @end
 
@@ -45,9 +46,10 @@ constexpr NSInteger kCheckboxTag = 1;
     title.font = [NSFont systemFontOfSize:15 weight:NSFontWeightSemibold];
 
     NSTextField *subtitle = [NSTextField
-        wrappingLabelWithString:@"Each one is either finished, left behind by an app you already "
-                                 @"quit, or an update checker macOS starts again when it needs it. "
-                                 @"Uncheck anything you would rather keep."];
+        wrappingLabelWithString:@"Checked rows are finished, left behind by an app you quit, or "
+                                 @"update checkers that start again by themselves. Unchecked rows "
+                                 @"are still alive but idle — closing those frees more memory, at "
+                                 @"the cost of a reload when you go back to them."];
     subtitle.font = [NSFont systemFontOfSize:NSFont.smallSystemFontSize];
     subtitle.textColor = NSColor.secondaryLabelColor;
     subtitle.preferredMaxLayoutWidth = 560;
@@ -90,6 +92,12 @@ constexpr NSInteger kCheckboxTag = 1;
     self.summaryLabel.font = [NSFont monospacedDigitSystemFontOfSize:NSFont.systemFontSize
                                                                weight:NSFontWeightMedium];
 
+    // With only opt-in proposals on offer every row starts unchecked, which
+    // would otherwise leave the user looking at a greyed-out primary button
+    // and no obvious way forward.
+    self.selectAllButton = [NSButton buttonWithTitle:@"Select All" target:self action:@selector(toggleSelectAll:)];
+    self.selectAllButton.bezelStyle = NSBezelStyleRounded;
+
     NSButton *cancel = [NSButton buttonWithTitle:@"Cancel" target:self action:@selector(cancel:)];
     cancel.bezelStyle = NSBezelStyleRounded;
     cancel.keyEquivalent = @"\033"; // Esc
@@ -103,7 +111,7 @@ constexpr NSInteger kCheckboxTag = 1;
                        forOrientation:NSLayoutConstraintOrientationHorizontal];
 
     NSStackView *buttons = [NSStackView stackViewWithViews:@[
-        self.summaryLabel, spacer, cancel, self.confirmButton
+        self.summaryLabel, spacer, self.selectAllButton, cancel, self.confirmButton
     ]];
     buttons.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     buttons.spacing = 8;
@@ -150,18 +158,45 @@ constexpr NSInteger kCheckboxTag = 1;
     [self updateSummary];
 }
 
+- (void)toggleSelectAll:(id)sender {
+    // One button, two directions: "Select All" until everything is checked,
+    // then "Deselect All".
+    const BOOL selectEverything = ![self allSelected];
+    for (MCOptimizationCandidate *candidate in self.candidates) {
+        candidate.selected = selectEverything;
+    }
+    [self.tableView reloadData];
+    [self updateSummary];
+}
+
+- (BOOL)allSelected {
+    for (MCOptimizationCandidate *candidate in self.candidates) {
+        if (!candidate.selected) {
+            return NO;
+        }
+    }
+    return YES;
+}
+
 - (void)updateSummary {
     NSUInteger count = 0;
     unsigned long long bytes = 0;
+    unsigned long long available = 0;
     for (MCOptimizationCandidate *candidate in self.candidates) {
+        available += candidate.reclaimableBytes;
         if (candidate.selected) {
             ++count;
             bytes += candidate.reclaimableBytes;
         }
     }
+
+    // With nothing checked, say what is on offer rather than the useless
+    // "Nothing selected" -- the user opened this sheet to find out.
     self.summaryLabel.stringValue =
-        count == 0 ? @"Nothing selected"
+        count == 0 ? [NSString stringWithFormat:@"%@ available · check rows to close them",
+                                                 humanSize(available)]
                     : [NSString stringWithFormat:@"%lu selected · %@", (unsigned long)count, humanSize(bytes)];
+    self.selectAllButton.title = [self allSelected] ? @"Deselect All" : @"Select All";
     self.confirmButton.enabled = count > 0;
 }
 
@@ -230,11 +265,13 @@ constexpr NSInteger kCheckboxTag = 1;
 
     if ([identifier isEqualToString:kNameColumn]) {
         field.stringValue = candidate.name;
-        field.textColor = NSColor.labelColor;
+        // Opt-in rows read as secondary: they are alive and doing something,
+        // and the eye should land on the safe proposals first.
+        field.textColor = candidate.recommended ? NSColor.labelColor : NSColor.secondaryLabelColor;
         field.toolTip = [NSString stringWithFormat:@"%@\npid %d", candidate.path, candidate.pid];
     } else if ([identifier isEqualToString:kReasonColumn]) {
         field.stringValue = candidate.reason;
-        field.textColor = NSColor.secondaryLabelColor;
+        field.textColor = candidate.recommended ? NSColor.secondaryLabelColor : NSColor.tertiaryLabelColor;
         field.toolTip = candidate.kindLabel;
     } else {
         field.stringValue = humanSize(candidate.reclaimableBytes);

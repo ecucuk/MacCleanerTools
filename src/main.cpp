@@ -2,12 +2,18 @@
 #include "maccleaner/cleaner.hpp"
 #include "maccleaner/cli.hpp"
 #include "maccleaner/format.hpp"
+#include "maccleaner/processes.hpp"
 #include "maccleaner/safety.hpp"
 #include "maccleaner/scanner.hpp"
 #include "maccleaner/trash.hpp"
 
+#include <unistd.h>
+
 #include <algorithm>
+#include <chrono>
+#include <cstdio>
 #include <iostream>
+#include <thread>
 
 namespace {
 
@@ -98,6 +104,38 @@ int runBigFiles(const CliOptions& options) {
     std::cout << "================================\n";
     std::cout << files.size() << " file(s), " << humanReadableBytes(total) << " total (threshold "
                << humanReadableBytes(scanOptions.minSizeBytes) << ", top " << scanOptions.maxResults << ")\n";
+    return 0;
+}
+
+int runProcesses(const CliOptions& options) {
+    const std::size_t top = options.top > 0 ? options.top : 20;
+    const bool sortByMemory = options.sortKey == "mem";
+
+    // CPU%% needs a sampling window; one second matches what people expect
+    // from `top`-style tools.
+    const std::vector<ProcessSample> before = sampleProcesses(::geteuid());
+    const auto start = std::chrono::steady_clock::now();
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    const std::vector<ProcessSample> after = sampleProcesses(::geteuid());
+    const auto wallDeltaNs = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
+
+    std::vector<ProcessInfo> infos = diffProcessSamples(before, after, wallDeltaNs);
+    std::sort(infos.begin(), infos.end(), [sortByMemory](const ProcessInfo& a, const ProcessInfo& b) {
+        return sortByMemory ? a.sample.memoryBytes > b.sample.memoryBytes : a.cpuPercent > b.cpuPercent;
+    });
+    if (infos.size() > top) {
+        infos.resize(top);
+    }
+
+    std::printf("%6s  %10s  %7s  %s\n", "CPU%", "MEM", "PID", "NAME");
+    for (const ProcessInfo& info : infos) {
+        std::printf("%6.1f  %10s  %7d  %s\n", info.cpuPercent,
+                     humanReadableBytes(info.sample.memoryBytes).c_str(), info.sample.pid,
+                     info.sample.name.c_str());
+    }
+    std::printf("%zu of %zu processes shown (owned by uid %u).\n", infos.size(), after.size(),
+                 ::geteuid());
     return 0;
 }
 
@@ -203,6 +241,8 @@ int main(int argc, char** argv) {
             return runClean(options);
         case Command::BigFiles:
             return runBigFiles(options);
+        case Command::Processes:
+            return runProcesses(options);
     }
     return 0;
 }

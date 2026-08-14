@@ -42,6 +42,7 @@ set(MACCLEANER_CORE_SOURCES
     src/safety.cpp
     src/scanner.cpp
     src/cleaner.cpp
+    src/bigfiles.cpp
     src/cli.cpp
 )
 
@@ -123,7 +124,10 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
     add_executable(MacCleaner MACOSX_BUNDLE
         src/gui/main.mm
         src/gui/MCScanModel.mm
+        src/gui/MCBigFilesModel.mm
         src/gui/MCMainWindowController.mm
+        src/gui/MCCleanerViewController.mm
+        src/gui/MCLargeFilesViewController.mm
         src/gui/MCUsageSummaryView.mm
         "${MACCLEANER_VIZ_HEADER_STAGED}"
     )
@@ -146,7 +150,12 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
     )
 
     find_library(COCOA_FRAMEWORK Cocoa REQUIRED)
-    target_link_libraries(MacCleaner PRIVATE ${COCOA_FRAMEWORK})
+    # Quartz supplies QLPreviewView (the Large Files media preview);
+    # UniformTypeIdentifiers supplies the UTType media gate in front of it.
+    find_library(QUARTZ_FRAMEWORK Quartz REQUIRED)
+    find_library(UTTYPE_FRAMEWORK UniformTypeIdentifiers REQUIRED)
+    target_link_libraries(MacCleaner PRIVATE
+        ${COCOA_FRAMEWORK} ${QUARTZ_FRAMEWORK} ${UTTYPE_FRAMEWORK})
 
     target_compile_options(MacCleaner PRIVATE -fobjc-arc)
 

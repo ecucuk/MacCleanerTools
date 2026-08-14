@@ -1,3 +1,4 @@
+#include "maccleaner/bigfiles.hpp"
 #include "maccleaner/cleaner.hpp"
 #include "maccleaner/cli.hpp"
 #include "maccleaner/format.hpp"
@@ -62,6 +63,41 @@ int runScan(const CliOptions& options) {
     const std::vector<ScanTarget> targets = selectTargets(options);
     const std::vector<ScanResult> results = scanAll(targets);
     printScanResults(results);
+    return 0;
+}
+
+int runBigFiles(const CliOptions& options) {
+    BigFileScanOptions scanOptions;
+    scanOptions.root = options.under.empty() ? homeDirectory() : std::filesystem::path(options.under);
+    if (options.minSizeBytes > 0) {
+        scanOptions.minSizeBytes = options.minSizeBytes;
+    }
+    if (options.top > 0) {
+        scanOptions.maxResults = options.top;
+    }
+
+    std::error_code ec;
+    if (!std::filesystem::is_directory(scanOptions.root, ec) || ec) {
+        std::cerr << "error: not a directory: " << scanOptions.root.string() << "\n";
+        return 2;
+    }
+
+    const std::vector<BigFile> files = findBigFiles(scanOptions);
+
+    if (files.empty()) {
+        std::cout << "No files >= " << humanReadableBytes(scanOptions.minSizeBytes) << " under "
+                   << scanOptions.root.string() << ".\n";
+        return 0;
+    }
+
+    std::uintmax_t total = 0;
+    for (const BigFile& file : files) {
+        std::cout << "  " << humanReadableBytes(file.sizeBytes) << "\t" << file.path.string() << "\n";
+        total += file.sizeBytes;
+    }
+    std::cout << "================================\n";
+    std::cout << files.size() << " file(s), " << humanReadableBytes(total) << " total (threshold "
+               << humanReadableBytes(scanOptions.minSizeBytes) << ", top " << scanOptions.maxResults << ")\n";
     return 0;
 }
 
@@ -165,6 +201,8 @@ int main(int argc, char** argv) {
             return runScan(options);
         case Command::Clean:
             return runClean(options);
+        case Command::BigFiles:
+            return runBigFiles(options);
     }
     return 0;
 }

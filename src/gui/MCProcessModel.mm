@@ -1,5 +1,6 @@
 #import "MCProcessModel.h"
 
+#include "maccleaner/optimizer.hpp"
 #include "maccleaner/processes.hpp"
 
 #include <mach/mach_time.h>
@@ -59,6 +60,27 @@ std::uint64_t nowNs() {
 
 @end
 
+@interface MCOptimizationCandidate ()
+- (instancetype)initWithCandidate:(const OptimizationCandidate &)candidate;
+@end
+
+@implementation MCOptimizationCandidate
+
+- (instancetype)initWithCandidate:(const OptimizationCandidate &)candidate {
+    if ((self = [super init])) {
+        _pid = candidate.sample.pid;
+        _name = [toNSString(candidate.sample.name) copy];
+        _path = [toNSString(candidate.sample.path) copy];
+        _kindLabel = [toNSString(toString(candidate.kind)) copy];
+        _reason = [toNSString(candidate.reason) copy];
+        _reclaimableBytes = candidate.reclaimableBytes;
+        _selected = YES; // proposals start accepted; the user unchecks what they want to keep
+    }
+    return self;
+}
+
+@end
+
 @interface MCProcessModel () {
     // Owned by the work queue: the previous snapshot and its timestamp, the
     // baseline for the next CPU%% computation.
@@ -105,6 +127,27 @@ std::uint64_t nowNs() {
         dispatch_async(dispatch_get_main_queue(), ^{
             self.refreshing = NO;
             completion(items);
+        });
+    });
+}
+
+- (void)findOptimizationCandidatesWithCompletion:
+    (void (^)(NSArray<MCOptimizationCandidate *> *))completion {
+    dispatch_async(self.workQueue, ^{
+        // A fresh sample rather than the refresh cycle's cached one: the
+        // rules key on process state and parentage, and acting on a snapshot
+        // up to two seconds stale is exactly how you signal the wrong pid.
+        const std::vector<ProcessSample> samples = sampleProcesses(::geteuid());
+        const std::vector<OptimizationCandidate> found = findOptimizationCandidates(samples);
+
+        NSMutableArray<MCOptimizationCandidate *> *candidates =
+            [NSMutableArray arrayWithCapacity:found.size()];
+        for (const OptimizationCandidate &candidate : found) {
+            [candidates addObject:[[MCOptimizationCandidate alloc] initWithCandidate:candidate]];
+        }
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            completion(candidates);
         });
     });
 }

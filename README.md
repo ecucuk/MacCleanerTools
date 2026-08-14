@@ -9,7 +9,8 @@ behind one sidebar:
 - **Large Files** — walk any directory (default: your home) and list the
   largest files, with Reveal-in-Finder and Move-to-Trash actions.
 - **Performance** — a live view of your processes by CPU, memory and
-  uptime, with heavy consumers flagged and guarded Quit / Force Quit.
+  uptime, with heavy consumers flagged, guarded Quit / Force Quit, and a
+  one-click **Optimize** that finds processes worth reclaiming.
 
 Ships as two front ends over one core library (`maccleaner_core`) — a
 `mac_cleaner` CLI and a `MacCleaner.app` AppKit GUI. Scanning, the safety
@@ -47,6 +48,8 @@ build/mac_cleaner bigfiles                       # 100 largest files >= 100 MB u
 build/mac_cleaner bigfiles --under=~/Movies --min=1G --top=20
 build/mac_cleaner processes                      # your 20 hungriest processes (1s sample)
 build/mac_cleaner processes --sort=mem --top=10
+build/mac_cleaner optimize                       # report reclaimable processes
+build/mac_cleaner optimize --apply               # and terminate them (SIGTERM)
 ```
 
 ## Usage — GUI
@@ -83,6 +86,45 @@ so the first refresh reads 0 — there is no baseline yet. The *Heavy /
 Long-Running* filter selects processes over 50 % CPU, over 1 GB of memory,
 or running for more than a day while still burning 10 %+ CPU. Sampling
 stops while the tool is off-screen, and **Pause** freezes it for reading.
+
+### Optimize
+
+**Optimize…** answers one question — *what is running that nobody needs?* —
+and it answers it narrowly, because the failure mode of a process optimizer
+is closing something that was doing its job. A process is proposed only when
+it is:
+
+1. **Finished or suspended** — a zombie waiting for a parent that will never
+   reap it, or a stopped process. Doing nothing, and never will again.
+2. **An orphaned renderer** — a Chromium/Electron *role* helper
+   (`Foo Helper (Renderer)`, `(GPU)`, `(Plugin)`) whose owning `.app` is no
+   longer running. Its app quit and leaked it; it can no longer serve anyone.
+3. **An idle update checker** — a short, explicit list of updater/telemetry
+   agents (Google Keystone, Microsoft AutoUpdate, Adobe CC satellites) that
+   their app or launchd starts again on demand.
+
+And never when it is a **user-facing application** (anything with a Dock
+icon, which may be holding unsaved work), a **login item or launchd agent**,
+this app itself, or anything the [safe-kill guard](#which-processes-can-be-killed)
+rejects. Termination is **SIGTERM only** — the optimizer never escalates to
+SIGKILL on its own.
+
+Rule 2 is restricted to *role* helpers for a reason found the hard way: an
+earlier version matched any nested helper whose owning app was not running,
+and on a real machine proposed killing `Mac Mouse Fix Helper` — a login item
+that *is* the product, whose "app" is only its settings window. A role-less
+`Foo Helper` is usually a persistent agent; the parenthesised role is what
+marks a genuine per-session child.
+
+Deliberately **not** a rule: "idle process holding a lot of memory". Unused
+memory is not a problem to solve — macOS reclaims it under pressure — and
+that criterion is precisely how cleaner apps end up closing the editor with
+someone's unsaved file in it.
+
+Nothing is signalled until you review it. Clicking Optimize opens a sheet
+listing every proposal with its reason and footprint, all checked, and you
+uncheck anything you would rather keep. On a healthy Mac the honest result
+is usually "nothing to reclaim", and that is what it says.
 
 ### Which processes can be killed
 
@@ -230,6 +272,7 @@ src/platform/         OS-specific Trash backend (trash_mac.mm / trash_fallback.c
 src/gui/              AppKit front end: MCMainWindowController = sidebar shell,
                       MCCleanerViewController / MCLargeFilesViewController /
                       MCPerformanceViewController = tools,
+                      MCOptimizeSheetController = the Optimize review sheet,
                       MCScanModel / MCBigFilesModel / MCProcessModel =
                       core wrappers + threading,
                       main.mm = NSApplication

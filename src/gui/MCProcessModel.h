@@ -26,6 +26,20 @@ typedef NS_ENUM(NSInteger, MCProcessKind) {
 @property(nonatomic, copy, readonly, nullable) NSString *notKillableReason;
 @end
 
+/// One process the optimizer proposes terminating, with the reason it was
+/// picked -- an optimizer that cannot explain itself is indistinguishable
+/// from one that kills things at random, so the reason is not optional.
+@interface MCOptimizationCandidate : NSObject
+@property(nonatomic, readonly) int pid;
+@property(nonatomic, copy, readonly) NSString *name;
+@property(nonatomic, copy, readonly) NSString *path;
+@property(nonatomic, copy, readonly) NSString *kindLabel; // "Orphaned helper", ...
+@property(nonatomic, copy, readonly) NSString *reason;    // one user-facing line
+@property(nonatomic, readonly) unsigned long long reclaimableBytes;
+/// UI state: candidates start selected, the user may uncheck any of them.
+@property(nonatomic) BOOL selected;
+@end
+
 @interface MCProcessModel : NSObject
 
 /// Takes a fresh sample off the main thread, diffs it against the previous
@@ -38,6 +52,14 @@ typedef NS_ENUM(NSInteger, MCProcessKind) {
 /// against the same safe-kill rules. Synchronous; returns NO with `error`
 /// set on rejection or failure.
 - (BOOL)killPid:(int)pid force:(BOOL)force error:(NSString *_Nullable *_Nullable)error;
+
+/// Takes a fresh sample off the main thread and applies the optimizer rules
+/// to it, delivering the proposals on main, largest footprint first. An
+/// empty array means there is genuinely nothing to reclaim -- which is the
+/// normal state of a healthy Mac, and is reported as such rather than
+/// padded with busywork.
+- (void)findOptimizationCandidatesWithCompletion:
+    (void (^)(NSArray<MCOptimizationCandidate *> *candidates))completion;
 
 @end
 

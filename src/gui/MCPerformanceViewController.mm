@@ -1,5 +1,6 @@
 #import "MCPerformanceViewController.h"
 
+#import "MCOptimizeSheetController.h"
 #import "MCProcessModel.h"
 
 #include "maccleaner/format.hpp"
@@ -78,6 +79,8 @@ NSString *kindLabel(MCProcessKind kind) {
 @property(nonatomic, copy) NSArray<MCProcessItem *> *items;      // filtered + sorted, what the table shows
 
 @property(nonatomic, strong) NSPopUpButton *filterPopUp;
+@property(nonatomic, strong) NSButton *optimizeButton;
+@property(nonatomic, strong) NSProgressIndicator *optimizeSpinner;
 @property(nonatomic, strong) NSButton *pauseButton;
 @property(nonatomic, strong) NSTextField *statusLabel;
 @property(nonatomic, strong) NSTableView *tableView;
@@ -86,6 +89,13 @@ NSString *kindLabel(MCProcessKind kind) {
 
 @property(nonatomic, strong, nullable) NSTimer *refreshTimer;
 @property(nonatomic) BOOL paused;
+
+// An outcome message ("Closed 3 processes…") that has to survive the next
+// refresh: the 2s cycle rewrites the status line with process counts, which
+// would otherwise erase the result of the action the user just took before
+// they could read it.
+@property(nonatomic, copy, nullable) NSString *stickyStatus;
+@property(nonatomic, strong, nullable) NSDate *stickyStatusUntil;
 
 @end
 
@@ -121,11 +131,26 @@ NSString *kindLabel(MCProcessKind kind) {
     self.pauseButton = [NSButton buttonWithTitle:@"Pause" target:self action:@selector(togglePaused:)];
     self.pauseButton.bezelStyle = NSBezelStyleRounded;
 
+    // The headline action of the tool: one click to find what can be
+    // reclaimed. It opens a review sheet rather than acting immediately --
+    // see MCOptimizeSheetController for why that is not negotiable.
+    self.optimizeButton = [NSButton buttonWithTitle:@"Optimize…" target:self action:@selector(optimize:)];
+    self.optimizeButton.bezelStyle = NSBezelStyleRounded;
+    self.optimizeButton.keyEquivalent = @"\r";
+    self.optimizeButton.toolTip = @"Find processes that can be closed safely";
+
+    self.optimizeSpinner = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
+    self.optimizeSpinner.style = NSProgressIndicatorStyleSpinning;
+    self.optimizeSpinner.controlSize = NSControlSizeSmall;
+    self.optimizeSpinner.displayedWhenStopped = NO;
+
     NSView *topSpacer = [[NSView alloc] initWithFrame:NSZeroRect];
     [topSpacer setContentHuggingPriority:NSLayoutPriorityDefaultLow
                           forOrientation:NSLayoutConstraintOrientationHorizontal];
 
-    NSStackView *topBar = [NSStackView stackViewWithViews:@[ self.filterPopUp, topSpacer, self.pauseButton ]];
+    NSStackView *topBar = [NSStackView stackViewWithViews:@[
+        self.filterPopUp, self.optimizeButton, self.optimizeSpinner, topSpacer, self.pauseButton
+    ]];
     topBar.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     topBar.spacing = 8;
     topBar.translatesAutoresizingMaskIntoConstraints = NO;
@@ -337,11 +362,104 @@ NSString *kindLabel(MCProcessKind kind) {
         [self.tableView selectRowIndexes:toSelect byExtendingSelection:NO];
     }
 
-    self.statusLabel.stringValue =
-        [NSString stringWithFormat:@"%lu process(es) · %lu heavy%@",
-                                    (unsigned long)self.allItems.count, (unsigned long)heavyCount,
-                                    self.paused ? @" · paused" : @""];
+    if (self.stickyStatus != nil && self.stickyStatusUntil != nil &&
+        [self.stickyStatusUntil timeIntervalSinceNow] > 0) {
+        self.statusLabel.stringValue = self.stickyStatus;
+    } else {
+        self.stickyStatus = nil;
+        self.stickyStatusUntil = nil;
+        self.statusLabel.stringValue =
+            [NSString stringWithFormat:@"%lu process(es) · %lu heavy%@",
+                                        (unsigned long)self.allItems.count, (unsigned long)heavyCount,
+                                        self.paused ? @" · paused" : @""];
+    }
     [self updateActionButtons];
+}
+
+/// Shows `message` and keeps it on screen across the next few refreshes.
+- (void)setStickyStatusMessage:(NSString *)message {
+    self.stickyStatus = message;
+    self.stickyStatusUntil = [NSDate dateWithTimeIntervalSinceNow:8];
+    self.statusLabel.stringValue = message;
+}
+
+#pragma mark - Optimize
+
+- (void)optimize:(id)sender {
+    self.optimizeButton.enabled = NO;
+    [self.optimizeSpinner startAnimation:nil];
+    self.statusLabel.stringValue = @"Looking for processes that can be closed…";
+
+    __weak MCPerformanceViewController *weakSelf = self;
+    [self.model findOptimizationCandidatesWithCompletion:^(NSArray<MCOptimizationCandidate *> *candidates) {
+        MCPerformanceViewController *strongSelf = weakSelf;
+        if (strongSelf == nil) {
+            return;
+        }
+        [strongSelf.optimizeSpinner stopAnimation:nil];
+        strongSelf.optimizeButton.enabled = YES;
+
+        if (candidates.count == 0) {
+            // The honest answer, and the common one on a healthy Mac.
+            // Inventing work here is what turns an optimizer into a
+            // placebo -- or worse, into something that closes things that
+            // were doing their job.
+            [strongSelf setStickyStatusMessage:@"Nothing to reclaim."];
+            NSAlert *alert = [[NSAlert alloc] init];
+            alert.alertStyle = NSAlertStyleInformational;
+            alert.messageText = @"Nothing to optimize";
+            alert.informativeText = @"No leftover helpers, finished processes or idle update "
+                                     @"agents were found. Everything running right now is either "
+                                     @"in use or doing its job.";
+            [alert addButtonWithTitle:@"OK"];
+            [alert beginSheetModalForWindow:strongSelf.view.window completionHandler:nil];
+            return;
+        }
+
+        MCOptimizeSheetController *sheet = [[MCOptimizeSheetController alloc]
+            initWithCandidates:candidates
+                      onConfirm:^(NSArray<MCOptimizationCandidate *> *accepted) {
+                          [weakSelf applyOptimization:accepted];
+                      }];
+        [strongSelf presentViewControllerAsSheet:sheet];
+    }];
+}
+
+- (void)applyOptimization:(NSArray<MCOptimizationCandidate *> *)accepted {
+    NSMutableArray<NSString *> *problems = [NSMutableArray array];
+    NSUInteger closed = 0;
+    unsigned long long reclaimed = 0;
+
+    for (MCOptimizationCandidate *candidate in accepted) {
+        NSString *error = nil;
+        // Graceful only: these are helpers and agents, and SIGTERM lets
+        // them shut down properly. The optimizer never escalates to
+        // SIGKILL on its own -- that stays a deliberate manual action.
+        if ([self.model killPid:candidate.pid force:NO error:&error]) {
+            ++closed;
+            reclaimed += candidate.reclaimableBytes;
+        } else {
+            [problems addObject:[NSString stringWithFormat:@"%@ — %@", candidate.name,
+                                                            error != nil ? error : @"unknown error"]];
+        }
+    }
+
+    [self setStickyStatusMessage:[NSString stringWithFormat:@"Closed %lu process(es) · %@ reclaimed",
+                                                              (unsigned long)closed, humanSize(reclaimed)]];
+
+    if (problems.count > 0) {
+        NSAlert *alert = [[NSAlert alloc] init];
+        alert.alertStyle = NSAlertStyleWarning;
+        alert.messageText = @"Some processes could not be closed";
+        alert.informativeText = [problems componentsJoinedByString:@"\n"];
+        [alert addButtonWithTitle:@"OK"];
+        [alert beginSheetModalForWindow:self.view.window completionHandler:nil];
+    }
+
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+                       [self refreshNow];
+                   });
 }
 
 #pragma mark - Selection / kill
@@ -455,9 +573,9 @@ NSString *kindLabel(MCProcessKind kind) {
         [alert beginSheetModalForWindow:self.view.window completionHandler:nil];
     }
 
-    self.statusLabel.stringValue =
-        [NSString stringWithFormat:@"Sent %@ to %lu process(es).", force ? @"SIGKILL" : @"SIGTERM",
-                                    (unsigned long)killed];
+    [self setStickyStatusMessage:[NSString stringWithFormat:@"Sent %@ to %lu process(es).",
+                                                              force ? @"SIGKILL" : @"SIGTERM",
+                                                              (unsigned long)killed]];
     // SIGTERM is asynchronous -- give processes a beat to exit before the
     // list refreshes, so the user sees them actually gone (or still there).
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)),

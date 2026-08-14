@@ -1,4 +1,4 @@
-#import "MCMainWindowController.h"
+#import "MCCleanerViewController.h"
 
 #import "MCScanModel.h"
 #import "MCUsageSummaryView.h"
@@ -57,7 +57,7 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
 
 } // namespace
 
-@interface MCMainWindowController () <NSOutlineViewDataSource, NSOutlineViewDelegate>
+@interface MCCleanerViewController () <NSOutlineViewDataSource, NSOutlineViewDelegate>
 
 @property(nonatomic, strong) MCScanModel *model;
 @property(nonatomic, strong) MCActivityBridge *activity;
@@ -79,27 +79,16 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
 
 @end
 
-@implementation MCMainWindowController
+@implementation MCCleanerViewController
 
 - (instancetype)init {
-    NSRect frame = NSMakeRect(0, 0, 860, 560);
-    NSWindow *window = [[NSWindow alloc]
-        initWithContentRect:frame
-                  styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
-                             NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable
-                    backing:NSBackingStoreBuffered
-                      defer:NO];
-    window.title = @"MacCleaner";
-    window.minSize = NSMakeSize(640, 400);
-    [window center];
-
-    if ((self = [super initWithWindow:window])) {
+    if ((self = [super initWithNibName:nil bundle:nil])) {
         _model = [[MCScanModel alloc] init];
         _activity = [[MCActivityBridge alloc] init];
 
-        __weak MCMainWindowController *weakSelf = self;
+        __weak MCCleanerViewController *weakSelf = self;
         // Both buttons in the activity window route back through the exact
-        // same actions as the main window's own buttons -- including the
+        // same actions as this tool's own buttons -- including the
         // confirmation sheet on the clean path. No second delete path exists.
         _activity.onRescanRequested = ^{
             [weakSelf rescan:nil];
@@ -107,16 +96,19 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
         _activity.onCleanRequested = ^{
             [weakSelf clean:nil];
         };
-
-        [self buildUI];
     }
     return self;
 }
 
 #pragma mark - Layout
 
+- (void)loadView {
+    self.view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 680, 560)];
+    [self buildUI];
+}
+
 - (void)buildUI {
-    NSView *content = self.window.contentView;
+    NSView *content = self.view;
 
     // --- top bar ---------------------------------------------------------
     self.scanButton = [NSButton buttonWithTitle:@"Rescan" target:self action:@selector(rescan:)];
@@ -242,12 +234,12 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
 - (void)startInitialScan {
     // The activity window ships open on first launch so the visualization is
     // discoverable; it remembers nothing, so closing it is one click.
-    [self.activity showWindowRelativeTo:self.window];
+    [self.activity showWindowRelativeTo:self.view.window];
     [self rescan:nil];
 }
 
 - (void)showActivity:(id)sender {
-    [self.activity showWindowRelativeTo:self.window];
+    [self.activity showWindowRelativeTo:self.view.window];
 }
 
 - (void)rescan:(id)sender {
@@ -257,7 +249,7 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
     [self setBusy:YES status:@"Scanning… (this walks every cache directory, so it can take a moment)"];
     [self.activity scanBegan];
 
-    __weak MCMainWindowController *weakSelf = self;
+    __weak MCCleanerViewController *weakSelf = self;
     [self.model
         scanWithWillScanCategory:^(NSString *label, NSString *path) {
             [weakSelf.activity categoryScanBeganWithLabel:label path:path];
@@ -270,7 +262,7 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
             }
         }
         completion:^{
-            MCMainWindowController *strongSelf = weakSelf;
+            MCCleanerViewController *strongSelf = weakSelf;
             if (strongSelf == nil) {
                 return;
             }
@@ -333,8 +325,8 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
         alert.buttons.lastObject.keyEquivalent = @"\r";
     }
 
-    __weak MCMainWindowController *weakSelf = self;
-    [alert beginSheetModalForWindow:self.window
+    __weak MCCleanerViewController *weakSelf = self;
+    [alert beginSheetModalForWindow:self.view.window
                   completionHandler:^(NSModalResponse response) {
                       if (response != NSAlertFirstButtonReturn) {
                           return;
@@ -349,7 +341,7 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
                                 bytesPlanned:self.model.selectedBytes
                                    permanent:permanent];
 
-    __weak MCMainWindowController *weakSelf = self;
+    __weak MCCleanerViewController *weakSelf = self;
     [self.model cleanSelectedPermanently:permanent
         entryProgress:^(NSString *path, BOOL succeeded, BOOL skippedBySafety, NSString *message,
                         unsigned long long bytesFreedSoFar, NSUInteger itemsDone, NSUInteger) {
@@ -361,7 +353,7 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
                                                 itemsDone:(NSInteger)itemsDone];
         }
         completion:^(MCCleanSummary *summary) {
-            MCMainWindowController *strongSelf = weakSelf;
+            MCCleanerViewController *strongSelf = weakSelf;
             if (strongSelf == nil) {
                 return;
             }
@@ -408,7 +400,7 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
     }
 
     [alert addButtonWithTitle:@"OK"];
-    [alert beginSheetModalForWindow:self.window completionHandler:nil];
+    [alert beginSheetModalForWindow:self.view.window completionHandler:nil];
 }
 
 #pragma mark - State

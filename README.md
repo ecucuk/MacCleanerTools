@@ -8,6 +8,8 @@ behind one sidebar:
   and package-manager caches (Homebrew, npm, Yarn, pip).
 - **Large Files** — walk any directory (default: your home) and list the
   largest files, with Reveal-in-Finder and Move-to-Trash actions.
+- **Performance** — a live view of your processes by CPU, memory and
+  uptime, with heavy consumers flagged and guarded Quit / Force Quit.
 
 Ships as two front ends over one core library (`maccleaner_core`) — a
 `mac_cleaner` CLI and a `MacCleaner.app` AppKit GUI. Scanning, the safety
@@ -43,6 +45,8 @@ build/mac_cleaner clean --apply                  # actually move items to Trash
 build/mac_cleaner clean --apply --permanent      # skip Trash, remove_all (irreversible)
 build/mac_cleaner bigfiles                       # 100 largest files >= 100 MB under $HOME
 build/mac_cleaner bigfiles --under=~/Movies --min=1G --top=20
+build/mac_cleaner processes                      # your 20 hungriest processes (1s sample)
+build/mac_cleaner processes --sort=mem --top=10
 ```
 
 ## Usage — GUI
@@ -71,6 +75,34 @@ recognized. **Space** (or the Quick Look button) opens the full Quick Look
 panel exactly like Finder: play videos and music with transport controls,
 zoom into photos, arrow through a multi-selection — and unlike the inline
 pane it previews any file type, PDFs and archives included.
+
+**Performance** samples your processes every two seconds and shows CPU %,
+memory, kind (App / System / Background), uptime and pid in a sortable
+table. CPU % is a true delta between samples (100 = one saturated core),
+so the first refresh reads 0 — there is no baseline yet. The *Heavy /
+Long-Running* filter selects processes over 50 % CPU, over 1 GB of memory,
+or running for more than a day while still burning 10 %+ CPU. Sampling
+stops while the tool is off-screen, and **Pause** freezes it for reading.
+
+### Which processes can be killed
+
+Quit (SIGTERM) and Force Quit (SIGKILL) both go through `isSafeToKill()`,
+which is to processes what the deletion allowlist is to files:
+
+- Only processes owned by the **current effective user** — the process
+  list itself is filtered by uid, and the guard re-checks ownership, so
+  root's and other users' processes are never offered (they are also
+  unkillable by the kernel, but the UI should not pretend otherwise).
+- Never **pid ≤ 1** (launchd) and never **this app itself**.
+- Never **loginwindow**, whose death ends the login session — an
+  "optimizer" that logs you out is not optimizing anything.
+- Everything else, macOS services included, is killable *with
+  confirmation*; the sheet warns when the selection contains system
+  services, which launchd generally restarts on its own. Force Quit makes
+  Cancel the default button.
+
+Processes that fail the guard are greyed out with the reason in a tooltip
+rather than silently failing when you press the button.
 
 The GUI's equivalent of the CLI's dry run is the confirmation sheet: nothing
 is touched until you confirm, and the sheet states the item count and total
@@ -183,6 +215,11 @@ allowlist-first rather than denylist-first:
 - `directorySizeBytes()` does a full recursive walk per top-level entry on
   every run; for very large `DerivedData`/cache trees this is I/O-bound and
   not cached between invocations.
+- Process killing has the same check-then-act gap as deletion: a pid
+  validated by `isSafeToKill()` could in principle be reused by another
+  process before the signal lands. macOS allocates pids sequentially and
+  the window is sub-millisecond, but closing it properly would mean holding
+  a task port or `pidfd`-style handle across the check.
 
 ## Layout
 
@@ -191,8 +228,10 @@ include/maccleaner/   public headers (types, safety, scanner, cleaner, trash, cl
 src/                  core implementation + CLI front end (main.cpp)
 src/platform/         OS-specific Trash backend (trash_mac.mm / trash_fallback.cpp)
 src/gui/              AppKit front end: MCMainWindowController = sidebar shell,
-                      MCCleanerViewController / MCLargeFilesViewController = tools,
-                      MCScanModel / MCBigFilesModel = core wrappers + threading,
+                      MCCleanerViewController / MCLargeFilesViewController /
+                      MCPerformanceViewController = tools,
+                      MCScanModel / MCBigFilesModel / MCProcessModel =
+                      core wrappers + threading,
                       main.mm = NSApplication
 src/gui/viz/          SwiftUI Activity window (own static lib, bridged via
                       the generated MacCleanerViz-Swift.h)

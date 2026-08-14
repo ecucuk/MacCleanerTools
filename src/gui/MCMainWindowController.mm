@@ -2,6 +2,7 @@
 
 #import "MCCleanerViewController.h"
 #import "MCLargeFilesViewController.h"
+#import "MCPerformanceViewController.h"
 
 #pragma mark - Tool registry
 
@@ -136,7 +137,12 @@
         largeFiles.symbolName = @"doc.text.magnifyingglass";
         largeFiles.make = ^{ return (NSViewController *)[[MCLargeFilesViewController alloc] init]; };
 
-        _tools = @[ cleaner, largeFiles ];
+        MCToolEntry *performance = [[MCToolEntry alloc] init];
+        performance.title = @"Performance";
+        performance.symbolName = @"gauge.with.needle";
+        performance.make = ^{ return (NSViewController *)[[MCPerformanceViewController alloc] init]; };
+
+        _tools = @[ cleaner, largeFiles, performance ];
 
         _sidebar = [[MCToolSidebarController alloc] init];
         _sidebar.tools = _tools;

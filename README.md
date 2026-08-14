@@ -65,9 +65,12 @@ mid-scan — a cold whole-home walk is I/O-bound and can take minutes.
 Results support Reveal in Finder (double-click too) and Move to Trash;
 deletion re-validates every path through the same safety layer, with the
 chosen search root as the only allowed root. Selecting a photo, video or
-audio file shows a Quick Look preview in the right-hand pane (videos are
-playable); the media gate reads the on-disk content type, so a wrongly
-named file is still recognized.
+audio file shows an inline Quick Look preview in the right-hand pane; the
+media gate reads the on-disk content type, so a wrongly named file is still
+recognized. **Space** (or the Quick Look button) opens the full Quick Look
+panel exactly like Finder: play videos and music with transport controls,
+zoom into photos, arrow through a multi-selection — and unlike the inline
+pane it previews any file type, PDFs and archives included.
 
 The GUI's equivalent of the CLI's dry run is the confirmation sheet: nothing
 is touched until you confirm, and the sheet states the item count and total

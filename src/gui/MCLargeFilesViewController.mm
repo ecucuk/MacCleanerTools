@@ -39,7 +39,28 @@ constexpr NSUInteger kMaxResults = 200;
 
 } // namespace
 
-@interface MCLargeFilesViewController () <NSTableViewDataSource, NSTableViewDelegate>
+/// Space toggles the Quick Look panel, exactly like Finder. The table only
+/// forwards the intent up the responder chain -- the view controller owns the
+/// panel handshake -- so this stays a dumb view.
+@interface MCQuickLookTableView : NSTableView
+@end
+
+@implementation MCQuickLookTableView
+
+- (void)keyDown:(NSEvent *)event {
+    NSString *chars = event.charactersIgnoringModifiers;
+    if (chars.length == 1 && [chars characterAtIndex:0] == ' ' &&
+        (event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask) == 0) {
+        [NSApp sendAction:@selector(togglePreviewPanel:) to:nil from:self];
+        return;
+    }
+    [super keyDown:event];
+}
+
+@end
+
+@interface MCLargeFilesViewController () <NSTableViewDataSource, NSTableViewDelegate,
+                                           QLPreviewPanelDataSource, QLPreviewPanelDelegate>
 
 @property(nonatomic, strong) MCBigFilesModel *model;
 @property(nonatomic, copy) NSArray<MCBigFileItem *> *items;
@@ -53,6 +74,7 @@ constexpr NSUInteger kMaxResults = 200;
 @property(nonatomic, strong) NSProgressIndicator *spinner;
 @property(nonatomic, strong) NSTextField *statusLabel;
 @property(nonatomic, strong) NSTableView *tableView;
+@property(nonatomic, strong) NSButton *quickLookButton;
 @property(nonatomic, strong) NSButton *revealButton;
 @property(nonatomic, strong) NSButton *trashButton;
 
@@ -115,7 +137,7 @@ constexpr NSUInteger kMaxResults = 200;
     topBar.translatesAutoresizingMaskIntoConstraints = NO;
 
     // --- table -----------------------------------------------------------
-    self.tableView = [[NSTableView alloc] initWithFrame:NSZeroRect];
+    self.tableView = [[MCQuickLookTableView alloc] initWithFrame:NSZeroRect];
     self.tableView.dataSource = self;
     self.tableView.delegate = self;
     self.tableView.usesAlternatingRowBackgroundColors = YES;
@@ -208,6 +230,11 @@ constexpr NSUInteger kMaxResults = 200;
     self.statusLabel.textColor = NSColor.secondaryLabelColor;
     self.statusLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
 
+    self.quickLookButton = [NSButton buttonWithTitle:@"Quick Look" target:self action:@selector(togglePreviewPanel:)];
+    self.quickLookButton.bezelStyle = NSBezelStyleRounded;
+    self.quickLookButton.toolTip = @"Open the full Quick Look panel (Space)";
+    self.quickLookButton.enabled = NO;
+
     self.revealButton = [NSButton buttonWithTitle:@"Reveal in Finder" target:self action:@selector(revealSelection:)];
     self.revealButton.bezelStyle = NSBezelStyleRounded;
     self.revealButton.enabled = NO;
@@ -221,7 +248,7 @@ constexpr NSUInteger kMaxResults = 200;
                         forOrientation:NSLayoutConstraintOrientationHorizontal];
 
     NSStackView *bottomBar = [NSStackView stackViewWithViews:@[
-        self.statusLabel, spacer, self.revealButton, self.trashButton
+        self.statusLabel, spacer, self.quickLookButton, self.revealButton, self.trashButton
     ]];
     bottomBar.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     bottomBar.spacing = 8;
@@ -421,6 +448,7 @@ constexpr NSUInteger kMaxResults = 200;
     // The previewed file may be the one just trashed; QLPreviewView keeps
     // videos open, so drop the item rather than previewing a Trash entry.
     [self updatePreview];
+    [self reloadPreviewPanelIfVisible];
 
     if (problems.count == 0) {
         self.statusLabel.stringValue = [NSString stringWithFormat:@"Moved %lu file(s) to Trash · freed %@",
@@ -440,8 +468,100 @@ constexpr NSUInteger kMaxResults = 200;
 
 - (void)updateActionButtons {
     const BOOL hasSelection = self.tableView.selectedRowIndexes.count > 0;
+    self.quickLookButton.enabled = hasSelection;
     self.revealButton.enabled = hasSelection;
     self.trashButton.enabled = hasSelection && !self.model.scanning;
+}
+
+#pragma mark - Quick Look panel (Finder's Space behaviour)
+
+/// Space in the table, or the Quick Look button. The shared panel asks the
+/// responder chain for a controller; this VC volunteers below.
+- (void)togglePreviewPanel:(id)sender {
+    QLPreviewPanel *panel = [QLPreviewPanel sharedPreviewPanel];
+    if ([QLPreviewPanel sharedPreviewPanelExists] && panel.isVisible) {
+        [panel orderOut:nil];
+    } else {
+        [panel makeKeyAndOrderFront:nil];
+    }
+}
+
+- (BOOL)acceptsPreviewPanelControl:(QLPreviewPanel *)panel {
+    return YES;
+}
+
+- (void)beginPreviewPanelControl:(QLPreviewPanel *)panel {
+    panel.dataSource = self;
+    panel.delegate = self;
+}
+
+- (void)endPreviewPanelControl:(QLPreviewPanel *)panel {
+    panel.dataSource = nil;
+    panel.delegate = nil;
+}
+
+- (void)reloadPreviewPanelIfVisible {
+    if ([QLPreviewPanel sharedPreviewPanelExists] &&
+        [QLPreviewPanel sharedPreviewPanel].isVisible &&
+        [QLPreviewPanel sharedPreviewPanel].dataSource == self) {
+        [[QLPreviewPanel sharedPreviewPanel] reloadData];
+    }
+}
+
+#pragma mark QLPreviewPanelDataSource
+
+// The panel previews the current selection: one item selected shows that
+// item; a multi-selection gets the panel's own left/right arrows. Unlike the
+// inline pane there is no media gate -- Quick Look renders PDFs, archives,
+// text and whatever else, exactly like Finder's Space.
+- (NSInteger)numberOfPreviewItemsInPreviewPanel:(QLPreviewPanel *)panel {
+    return (NSInteger)[self selectedItems].count;
+}
+
+- (id<QLPreviewItem>)previewPanel:(QLPreviewPanel *)panel previewItemAtIndex:(NSInteger)index {
+    NSArray<MCBigFileItem *> *selected = [self selectedItems];
+    if (index < 0 || (NSUInteger)index >= selected.count) {
+        return nil;
+    }
+    return [NSURL fileURLWithPath:selected[(NSUInteger)index].path];
+}
+
+#pragma mark QLPreviewPanelDelegate
+
+/// Arrow keys land on the panel while it is key; forward them to the table
+/// so up/down moves the app's selection and the panel follows -- the same
+/// loop Finder runs. Everything else (Space to close, Esc, pinch zoom on
+/// images, the video/audio transport controls) is the panel's own.
+- (BOOL)previewPanel:(QLPreviewPanel *)panel handleEvent:(NSEvent *)event {
+    if (event.type == NSEventTypeKeyDown) {
+        const unichar key = event.charactersIgnoringModifiers.length > 0
+                                 ? [event.charactersIgnoringModifiers characterAtIndex:0]
+                                 : 0;
+        if (key == NSUpArrowFunctionKey || key == NSDownArrowFunctionKey) {
+            [self.tableView keyDown:event];
+            [panel reloadData];
+            return YES;
+        }
+    }
+    return NO;
+}
+
+/// Anchors the panel's open/close zoom animation to the previewed row.
+- (NSRect)previewPanel:(QLPreviewPanel *)panel sourceFrameOnScreenForPreviewItem:(id<QLPreviewItem>)item {
+    NSString *path = [(NSURL *)item path];
+    const NSUInteger index = [self.items indexOfObjectPassingTest:^BOOL(MCBigFileItem *candidate, NSUInteger, BOOL *) {
+        return [candidate.path isEqualToString:path];
+    }];
+    if (index == NSNotFound) {
+        return NSZeroRect;
+    }
+    const NSInteger row = (NSInteger)index;
+    const NSRect rowRect = [self.tableView rectOfRow:row];
+    if (!NSIntersectsRect(rowRect, self.tableView.visibleRect)) {
+        return NSZeroRect; // row scrolled away: let the panel fade instead
+    }
+    const NSRect inWindow = [self.tableView convertRect:rowRect toView:nil];
+    return [self.view.window convertRectToScreen:inWindow];
 }
 
 #pragma mark - Preview
@@ -548,6 +668,9 @@ constexpr NSUInteger kMaxResults = 200;
 - (void)tableViewSelectionDidChange:(NSNotification *)notification {
     [self updateActionButtons];
     [self updatePreview];
+    // Clicking through rows while the panel floats open must retarget it,
+    // Finder-style, without requiring another Space press.
+    [self reloadPreviewPanelIfVisible];
 }
 
 @end

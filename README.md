@@ -35,6 +35,32 @@ ctest --test-dir build --output-on-failure
 Both front ends build by default; pass `-DMACCLEANER_BUILD_GUI=OFF` to skip
 the app (and build headless / on non-Apple platforms).
 
+### Installing
+
+The build produces a self-contained `build/MacCleaner.app`; copy it to
+`/Applications` to install:
+
+```sh
+ditto build/MacCleaner.app /Applications/MacCleaner.app
+```
+
+### App icon
+
+The icon is drawn from scratch with Core Graphics by `tools/make_icon.m` —
+no third-party artwork, so there is nothing to license. `resources/
+MacCleaner.icns` is generated from it by `tools/build_icon.sh` and committed,
+so a normal build never runs the generator; re-run the script after changing
+the design. The script honours `$CC`/`$CFLAGS`, which lets a non-Apple clang
+build it against the Command Line Tools SDK when the Xcode toolchain is
+unavailable (an unaccepted Xcode license gates every `/usr/bin` compiler,
+`xcrun` included):
+
+```sh
+CC=/opt/homebrew/opt/llvm/bin/clang \
+CFLAGS="-isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -B/Library/Developer/CommandLineTools/usr/bin" \
+sh tools/build_icon.sh
+```
+
 ## Usage — CLI
 
 ```sh

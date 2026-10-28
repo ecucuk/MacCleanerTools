@@ -162,6 +162,7 @@ NSColor *paletteColor(NSInteger slot) {
 @interface MCUsageSummaryView ()
 @property(nonatomic, strong) NSTextField *headline;
 @property(nonatomic, strong) NSTextField *caption;
+@property(nonatomic, strong) NSStackView *headlineRow;
 @property(nonatomic, strong) MCBarView *bar;
 @property(nonatomic, strong) NSStackView *legend;
 @end
@@ -170,6 +171,7 @@ NSColor *paletteColor(NSInteger slot) {
 
 - (instancetype)initWithFrame:(NSRect)frameRect {
     if ((self = [super initWithFrame:frameRect])) {
+        _showsHeadline = YES;
         [self build];
     }
     return self;
@@ -188,6 +190,7 @@ NSColor *paletteColor(NSInteger slot) {
     headlineRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     headlineRow.alignment = NSLayoutAttributeFirstBaseline;
     headlineRow.spacing = 6;
+    self.headlineRow = headlineRow;
 
     self.bar = [[MCBarView alloc] initWithFrame:NSZeroRect];
     self.bar.translatesAutoresizingMaskIntoConstraints = NO;
@@ -212,6 +215,11 @@ NSColor *paletteColor(NSInteger slot) {
         [column.bottomAnchor constraintEqualToAnchor:self.bottomAnchor],
         [self.bar.widthAnchor constraintEqualToAnchor:column.widthAnchor],
     ]];
+}
+
+- (void)setShowsHeadline:(BOOL)showsHeadline {
+    _showsHeadline = showsHeadline;
+    self.headlineRow.hidden = !showsHeadline;
 }
 
 + (NSColor *)colorForSlot:(NSInteger)slot {

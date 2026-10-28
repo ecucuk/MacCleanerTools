@@ -30,6 +30,10 @@ NS_ASSUME_NONNULL_BEGIN
 /// colour rather than wrapping around.
 + (NSColor *)colorForSlot:(NSInteger)slot;
 
+/// NO hides the total and its caption, for a host that shows the total
+/// itself. Defaults to YES.
+@property(nonatomic) BOOL showsHeadline;
+
 @end
 
 NS_ASSUME_NONNULL_END

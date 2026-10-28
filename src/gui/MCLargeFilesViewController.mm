@@ -1,8 +1,9 @@
 #import "MCLargeFilesViewController.h"
 
 #import "MCBigFilesModel.h"
-#import "MCEmptyStateView.h"
+#import "MCHeroView.h"
 #import "MCTheme.h"
+#import "MCToolBanner.h"
 
 // Quartz brings QLPreviewView: one view that renders what Finder's Quick
 // Look renders (HEIC/RAW images, video with playback controls, audio),
@@ -88,7 +89,9 @@ constexpr NSUInteger kMaxResults = 200;
 // Preview pane: Quick Look for media/photo selections, a placeholder
 // (icon + caption) for everything else.
 @property(nonatomic, strong) QLPreviewView *previewView;
-@property(nonatomic, strong) MCEmptyStateView *emptyState;
+@property(nonatomic, strong) MCHeroView *hero;
+@property(nonatomic, strong) MCToolBanner *banner;
+@property(nonatomic) BOOL hasScanned;
 @property(nonatomic, strong) NSStackView *placeholderStack;
 @property(nonatomic, strong) NSImageView *placeholderIcon;
 @property(nonatomic, strong) NSTextField *placeholderLabel;
@@ -133,10 +136,9 @@ constexpr NSUInteger kMaxResults = 200;
     }
     [self.thresholdPopUp selectItemAtIndex:kDefaultThresholdIndex];
 
-    self.scanButton = [NSButton buttonWithTitle:@"Scan" target:self action:@selector(scanOrCancel:)];
-    self.scanButton.bezelStyle = NSBezelStyleRounded;
+    self.scanButton = [MCGlassButton buttonWithTitle:@"Scan" style:MCGlassButtonStylePillPrimary
+                                                tool:MCToolLargeFiles target:self action:@selector(scanOrCancel:)];
     self.scanButton.keyEquivalent = @"\r";
-    [MCTheme stylePrimaryButton:self.scanButton];
 
     self.spinner = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
     self.spinner.style = NSProgressIndicatorStyleSpinning;
@@ -144,7 +146,7 @@ constexpr NSUInteger kMaxResults = 200;
     self.spinner.displayedWhenStopped = NO;
 
     NSStackView *topBar = [NSStackView stackViewWithViews:@[
-        self.rootLabel, self.chooseButton, self.thresholdPopUp, self.scanButton, self.spinner
+        self.rootLabel, self.chooseButton, self.thresholdPopUp, self.spinner
     ]];
     topBar.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     topBar.spacing = 8;
@@ -181,8 +183,7 @@ constexpr NSUInteger kMaxResults = 200;
     scrollView.hasVerticalScroller = YES;
     scrollView.autohidesScrollers = YES;
     [MCTheme styleCard:scrollView];
-    self.emptyState = [[MCEmptyStateView alloc] initWithIllustration:@"empty-large-files"];
-    NSView *card = [self.emptyState wrapCard:scrollView];
+    NSView *card = scrollView;
 
     // --- preview pane ----------------------------------------------------
     self.previewView = [[QLPreviewView alloc] initWithFrame:NSZeroRect
@@ -280,13 +281,37 @@ constexpr NSUInteger kMaxResults = 200;
     bottomBar.spacing = 8;
     bottomBar.translatesAutoresizingMaskIntoConstraints = NO;
 
+    // --- results banner and start screen ---------------------------------
+    self.banner = [[MCToolBanner alloc] initWithTool:MCToolLargeFiles symbol:@"doc.text.magnifyingglass"];
+    self.banner.actions = @[ self.scanButton ];
+
+    self.hero = [[MCHeroView alloc] initWithTool:MCToolLargeFiles
+                                          symbol:@"doc.text.magnifyingglass"
+                                           title:@"Large Files"
+                                        subtitle:@"Find the biggest files in a folder and decide what goes."];
+    self.hero.actions = @[
+        [MCGlassButton buttonWithTitle:@"Scan" style:MCGlassButtonStyleRound tool:MCToolLargeFiles
+                                target:self action:@selector(scanOrCancel:)],
+        [MCGlassButton buttonWithTitle:@"Choose Folder…" style:MCGlassButtonStylePill tool:MCToolLargeFiles
+                                target:self action:@selector(chooseRoot:)],
+    ];
+    self.hero.scanningAccessory = [MCGlassButton buttonWithTitle:@"Stop" style:MCGlassButtonStylePill
+                                                            tool:MCToolLargeFiles target:self
+                                                          action:@selector(scanOrCancel:)];
+
+    [self.view addSubview:self.banner];
     [self.view addSubview:topBar];
     [self.view addSubview:splitView];
     [self.view addSubview:bottomBar];
+    [self.view addSubview:self.hero];
 
     const CGFloat margin = 16;
     [NSLayoutConstraint activateConstraints:@[
-        [topBar.topAnchor constraintEqualToAnchor:self.view.topAnchor constant:margin],
+        [self.banner.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:8],
+        [self.banner.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:margin],
+        [self.banner.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-margin],
+
+        [topBar.topAnchor constraintEqualToAnchor:self.banner.bottomAnchor constant:12],
         [topBar.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:margin],
         [topBar.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-margin],
 
@@ -298,21 +323,41 @@ constexpr NSUInteger kMaxResults = 200;
         [bottomBar.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:margin],
         [bottomBar.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-margin],
         [bottomBar.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor constant:-margin],
+
+        [self.hero.topAnchor constraintEqualToAnchor:self.view.topAnchor],
+        [self.hero.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
+        [self.hero.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [self.hero.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
     ]];
 
     [self updatePreview];
-    [self updateEmptyState];
+    [self updateHero];
 }
 
-- (void)updateEmptyState {
-    if (self.items.count > 0) {
-        [self.emptyState hide];
-    } else if (self.model.scanning) {
-        [self.emptyState showScanningWithMessage:@"Walking the folder for large files…"];
-    } else if (self.scanRoot == nil) {
-        [self.emptyState showIllustrationWithMessage:@"Choose a folder and press Scan."];
+/// The start screen until a scan shows its first row. After a finished
+/// scan the results stay, even when empty, so the threshold and folder
+/// controls are at hand for the next try.
+- (void)updateHero {
+    unsigned long long total = 0;
+    for (MCBigFileItem *item in self.items) {
+        total += item.sizeBytes;
+    }
+    const NSInteger thresholdIndex = MAX(self.thresholdPopUp.indexOfSelectedItem, 0);
+    NSString *root = [self displayPath:self.scanRoot != nil ? self.scanRoot : self.pendingRoot];
+    self.banner.value = humanSize(total);
+    self.banner.caption = [NSString stringWithFormat:@"in %lu file(s) of %s or more · %@", (unsigned long)self.items.count,
+                                                     kThresholds[thresholdIndex].label, root];
+
+    const BOOL presented = self.items.count == 0 && (self.model.scanning || !self.hasScanned);
+    [self.hero setPresented:presented];
+    if (!presented) {
+        return;
+    }
+    if (self.model.scanning) {
+        [self.hero showScanningWithStatus:@"Walking the folder for large files…"];
     } else {
-        [self.emptyState showIllustrationWithMessage:@"No files at or above the threshold."];
+        [self.hero showIdleWithMessage:[NSString stringWithFormat:@"Searches %@ for files of %s or more", root,
+                                                                  kThresholds[thresholdIndex].label]];
     }
 }
 
@@ -346,6 +391,7 @@ constexpr NSUInteger kMaxResults = 200;
                       strongSelf.pendingRoot = panel.URLs.firstObject.path;
                       strongSelf.rootLabel.stringValue = [strongSelf displayPath:strongSelf.pendingRoot];
                       strongSelf.rootLabel.toolTip = strongSelf.pendingRoot;
+                      [strongSelf updateHero];
                   }];
 }
 
@@ -391,7 +437,7 @@ constexpr NSUInteger kMaxResults = 200;
                   }
              resultsUpdate:^(NSArray<MCBigFileItem *> *files) {
                  [weakSelf applyStreamedItems:files];
-                 [weakSelf updateEmptyState];
+                 [weakSelf updateHero];
              }
                 completion:^(NSArray<MCBigFileItem *> *files) {
                     MCLargeFilesViewController *strongSelf = weakSelf;
@@ -400,6 +446,7 @@ constexpr NSUInteger kMaxResults = 200;
                     }
                     strongSelf.items = files;
                     strongSelf.scanRoot = root;
+                    strongSelf.hasScanned = YES;
                     [strongSelf.tableView reloadData];
                     [strongSelf.spinner stopAnimation:nil];
                     strongSelf.scanButton.title = @"Scan";
@@ -418,9 +465,9 @@ constexpr NSUInteger kMaxResults = 200;
                                                           (unsigned long)files.count, humanSize(total)];
                     [strongSelf updateActionButtons];
                     [strongSelf updatePreview];
-                    [strongSelf updateEmptyState];
+                    [strongSelf updateHero];
                 }];
-    [self updateEmptyState]; // after scanUnder:, so `scanning` is already set
+    [self updateHero]; // after scanUnder:, so `scanning` is already set
 }
 
 /// Streams a mid-scan snapshot into the table. Selection is preserved by
@@ -465,6 +512,10 @@ constexpr NSUInteger kMaxResults = 200;
         [NSString stringWithFormat:@"Scanning… %llu entries · %lu found · %@ · %@",
                                     (unsigned long long)self.scanVisited,
                                     (unsigned long)self.items.count, humanSize(total), where];
+    if (self.hero.presented) {
+        [self.hero setStatus:[NSString stringWithFormat:@"%llu entries · %@", (unsigned long long)self.scanVisited,
+                                                        where]];
+    }
 }
 
 - (NSArray<MCBigFileItem *> *)selectedItems {
@@ -542,7 +593,7 @@ constexpr NSUInteger kMaxResults = 200;
     self.items = remaining;
     [self.tableView reloadData];
     [self updateActionButtons];
-    [self updateEmptyState];
+    [self updateHero];
     // The previewed file may be the one just trashed; QLPreviewView keeps
     // videos open, so drop the item rather than previewing a Trash entry.
     [self updatePreview];

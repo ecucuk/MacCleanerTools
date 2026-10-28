@@ -12,7 +12,7 @@
 /// selection so tools the user never opens cost nothing.
 @interface MCToolEntry : NSObject
 @property(nonatomic, copy) NSString *title;
-@property(nonatomic, copy) NSString *subtitle;
+@property(nonatomic) MCTool tool;
 @property(nonatomic, copy) NSString *symbolName;
 @property(nonatomic, copy) NSViewController * (^make)(void);
 @property(nonatomic, strong, nullable) NSViewController *controller;
@@ -100,7 +100,7 @@
 
     MCToolEntry *tool = self.tools[(NSUInteger)row];
     cell.textField.stringValue = tool.title;
-    cell.imageView.image = [MCTheme badgeWithSymbol:tool.symbolName size:22];
+    cell.imageView.image = [MCTheme badgeWithSymbol:tool.symbolName size:22 tool:tool.tool];
     return cell;
 }
 
@@ -115,7 +115,7 @@
 
 #pragma mark - Shell
 
-@interface MCMainWindowController () <MCToolSidebarDelegate, NSWindowDelegate, NSToolbarDelegate>
+@interface MCMainWindowController () <MCToolSidebarDelegate, NSWindowDelegate>
 @property(nonatomic, strong) MCToolSidebarController *sidebar;
 @property(nonatomic, strong) NSViewController *contentHost; // swaps tool views
 @property(nonatomic, copy) NSArray<MCToolEntry *> *tools;
@@ -135,38 +135,35 @@
                       defer:NO];
     window.title = @"MacCleaner";
     window.minSize = NSMakeSize(760, 420);
-    window.toolbarStyle = NSWindowToolbarStyleUnified;
+    // Each tool's gradient runs up under a transparent title bar; the tool
+    // names itself in its hero and banner, so the title text stays hidden.
+    window.titlebarAppearsTransparent = YES;
+    window.titleVisibility = NSWindowTitleHidden;
     [window center];
 
     if ((self = [super initWithWindow:window])) {
         window.delegate = self;
-        // A unified toolbar carries the tool's title and description; the
-        // sidebar tracking separator keeps them over the content column.
-        NSToolbar *toolbar = [[NSToolbar alloc] initWithIdentifier:@"MCMainToolbar"];
-        toolbar.delegate = self;
-        window.toolbar = toolbar;
-
         MCToolEntry *cleaner = [[MCToolEntry alloc] init];
         cleaner.title = @"Storage Cleaner";
-        cleaner.subtitle = @"Caches, logs and developer leftovers that are safe to remove.";
+        cleaner.tool = MCToolCleaner;
         cleaner.symbolName = @"trash";
         cleaner.make = ^{ return (NSViewController *)[[MCCleanerViewController alloc] init]; };
 
         MCToolEntry *largeFiles = [[MCToolEntry alloc] init];
         largeFiles.title = @"Large Files";
-        largeFiles.subtitle = @"Find the biggest files in a folder and decide what goes.";
+        largeFiles.tool = MCToolLargeFiles;
         largeFiles.symbolName = @"doc.text.magnifyingglass";
         largeFiles.make = ^{ return (NSViewController *)[[MCLargeFilesViewController alloc] init]; };
 
         MCToolEntry *performance = [[MCToolEntry alloc] init];
         performance.title = @"Performance";
-        performance.subtitle = @"See what uses your CPU and memory, and reclaim it.";
+        performance.tool = MCToolPerformance;
         performance.symbolName = @"gauge.with.needle";
         performance.make = ^{ return (NSViewController *)[[MCPerformanceViewController alloc] init]; };
 
         MCToolEntry *photoCleaner = [[MCToolEntry alloc] init];
         photoCleaner.title = @"Photo Cleaner";
-        photoCleaner.subtitle = @"Find duplicate, similar and blurry photos.";
+        photoCleaner.tool = MCToolPhotos;
         photoCleaner.symbolName = @"photo.on.rectangle.angled";
         photoCleaner.make = ^{ return (NSViewController *)[[MCPhotosViewController alloc] init]; };
 
@@ -217,22 +214,6 @@
     [NSApp terminate:nil];
 }
 
-#pragma mark NSToolbarDelegate
-
-- (NSArray<NSToolbarItemIdentifier> *)toolbarDefaultItemIdentifiers:(NSToolbar *)toolbar {
-    return @[ NSToolbarSidebarTrackingSeparatorItemIdentifier ];
-}
-
-- (NSArray<NSToolbarItemIdentifier> *)toolbarAllowedItemIdentifiers:(NSToolbar *)toolbar {
-    return [self toolbarDefaultItemIdentifiers:toolbar];
-}
-
-- (nullable NSToolbarItem *)toolbar:(NSToolbar *)toolbar
-              itemForItemIdentifier:(NSToolbarItemIdentifier)itemIdentifier
-          willBeInsertedIntoToolbar:(BOOL)flag {
-    return nil; // only system items, which AppKit supplies itself
-}
-
 #pragma mark MCToolSidebarDelegate
 
 - (void)sidebarDidSelectToolAtIndex:(NSInteger)index {
@@ -263,15 +244,14 @@
     toolView.translatesAutoresizingMaskIntoConstraints = NO;
     [host addSubview:toolView];
     [NSLayoutConstraint activateConstraints:@[
-        // The safe area starts below the full-size content's toolbar.
-        [toolView.topAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.topAnchor],
+        // Up under the title bar; tools keep their own controls in the safe area.
+        [toolView.topAnchor constraintEqualToAnchor:host.topAnchor],
         [toolView.bottomAnchor constraintEqualToAnchor:self.contentHost.view.bottomAnchor],
         [toolView.leadingAnchor constraintEqualToAnchor:self.contentHost.view.leadingAnchor],
         [toolView.trailingAnchor constraintEqualToAnchor:self.contentHost.view.trailingAnchor],
     ]];
 
-    self.window.title = tool.title;
-    self.window.subtitle = tool.subtitle;
+    self.window.title = tool.title; // hidden, but the Window menu lists it
 }
 
 @end

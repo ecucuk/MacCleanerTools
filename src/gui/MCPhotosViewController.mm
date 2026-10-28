@@ -1,8 +1,9 @@
 #import "MCPhotosViewController.h"
 
-#import "MCEmptyStateView.h"
+#import "MCHeroView.h"
 #import "MCPhotoModel.h"
 #import "MCTheme.h"
+#import "MCToolBanner.h"
 
 #import <Quartz/Quartz.h>
 
@@ -81,7 +82,8 @@ NSImageView *imageViewWithoutIntrinsicSize() {
 @property(nonatomic, copy, nullable) NSString *scanRoot;        // nil = library results
 @property(nonatomic) NSUInteger skipped;
 @property(nonatomic) BOOL hasScanned;
-@property(nonatomic, strong) MCEmptyStateView *emptyState;
+@property(nonatomic, strong) MCHeroView *hero;
+@property(nonatomic, strong) MCToolBanner *banner;
 @property(nonatomic, copy, nullable) NSArray<NSArray<MCPhotoItem *> *> *groups; // cache; nil = stale
 @property(nonatomic) NSInteger groupedDistance;
 @property(nonatomic, strong) NSCache<NSString *, NSImage *> *thumbnails;
@@ -131,9 +133,10 @@ NSImageView *imageViewWithoutIntrinsicSize() {
     [self.sourceLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
                                                 forOrientation:NSLayoutConstraintOrientationHorizontal];
 
-    self.folderButton = [NSButton buttonWithTitle:@"Scan Folder…" target:self action:@selector(scanFolder:)];
-    self.libraryButton = [NSButton buttonWithTitle:@"Scan Photos Library" target:self action:@selector(scanLibrary:)];
-    [MCTheme stylePrimaryButton:self.folderButton];
+    self.folderButton = [MCGlassButton buttonWithTitle:@"Scan Folder…" style:MCGlassButtonStylePillPrimary
+                                                 tool:MCToolPhotos target:self action:@selector(scanFolder:)];
+    self.libraryButton = [MCGlassButton buttonWithTitle:@"Scan Photos Library" style:MCGlassButtonStylePill
+                                                  tool:MCToolPhotos target:self action:@selector(scanLibrary:)];
     self.stopButton = [NSButton buttonWithTitle:@"Stop" target:self action:@selector(stopScan:)];
     self.stopButton.hidden = YES;
 
@@ -143,7 +146,7 @@ NSImageView *imageViewWithoutIntrinsicSize() {
     self.spinner.displayedWhenStopped = NO;
 
     NSStackView *sourceBar = [NSStackView stackViewWithViews:@[
-        self.sourceLabel, self.folderButton, self.libraryButton, self.stopButton, self.spinner
+        self.sourceLabel, self.stopButton, self.spinner
     ]];
     sourceBar.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     sourceBar.spacing = 8;
@@ -208,8 +211,7 @@ NSImageView *imageViewWithoutIntrinsicSize() {
     scrollView.hasVerticalScroller = YES;
     scrollView.autohidesScrollers = YES;
     [MCTheme styleCard:scrollView];
-    self.emptyState = [[MCEmptyStateView alloc] initWithIllustration:@"empty-photos"];
-    NSView *card = [self.emptyState wrapCard:scrollView];
+    NSView *card = scrollView;
 
     // --- preview -----------------------------------------------------------
     self.previewView = imageViewWithoutIntrinsicSize();
@@ -280,14 +282,38 @@ NSImageView *imageViewWithoutIntrinsicSize() {
         [bar setHuggingPriority:NSLayoutPriorityDefaultHigh forOrientation:NSLayoutConstraintOrientationVertical];
     }
 
+    // --- results banner and start screen ---------------------------------
+    self.banner = [[MCToolBanner alloc] initWithTool:MCToolPhotos symbol:@"photo.on.rectangle.angled"];
+    self.banner.actions = @[ self.libraryButton, self.folderButton ];
+
+    self.hero = [[MCHeroView alloc] initWithTool:MCToolPhotos
+                                          symbol:@"photo.on.rectangle.angled"
+                                           title:@"Photo Cleaner"
+                                        subtitle:@"Find duplicate, similar and blurry photos."];
+    self.hero.actions = @[
+        [MCGlassButton buttonWithTitle:@"Scan" style:MCGlassButtonStyleRound tool:MCToolPhotos
+                                target:self action:@selector(scanFolder:)],
+        [MCGlassButton buttonWithTitle:@"Scan Photos Library Instead" style:MCGlassButtonStylePill tool:MCToolPhotos
+                                target:self action:@selector(scanLibrary:)],
+    ];
+    self.hero.scanningAccessory = [MCGlassButton buttonWithTitle:@"Stop" style:MCGlassButtonStylePill
+                                                            tool:MCToolPhotos target:self
+                                                          action:@selector(stopScan:)];
+
+    [self.view addSubview:self.banner];
     [self.view addSubview:sourceBar];
     [self.view addSubview:thresholdBar];
     [self.view addSubview:splitView];
     [self.view addSubview:bottomBar];
+    [self.view addSubview:self.hero];
 
     const CGFloat margin = 16;
     [NSLayoutConstraint activateConstraints:@[
-        [sourceBar.topAnchor constraintEqualToAnchor:self.view.topAnchor constant:margin],
+        [self.banner.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:8],
+        [self.banner.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:margin],
+        [self.banner.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-margin],
+
+        [sourceBar.topAnchor constraintEqualToAnchor:self.banner.bottomAnchor constant:12],
         [sourceBar.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:margin],
         [sourceBar.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-margin],
 
@@ -303,22 +329,36 @@ NSImageView *imageViewWithoutIntrinsicSize() {
         [bottomBar.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:margin],
         [bottomBar.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-margin],
         [bottomBar.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor constant:-margin],
+
+        [self.hero.topAnchor constraintEqualToAnchor:self.view.topAnchor],
+        [self.hero.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
+        [self.hero.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
+        [self.hero.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
     ]];
 
     [self updateDistanceLabel];
-    [self updateEmptyState];
+    [self updateHero];
 }
 
-- (void)updateEmptyState {
-    const BOOL empty = self.roots.firstObject.children.count == 0 && self.roots.lastObject.children.count == 0;
-    if (!empty) {
-        [self.emptyState hide];
-    } else if (self.model.scanning) {
-        [self.emptyState showScanningWithMessage:@"Comparing photos and measuring sharpness…"];
-    } else if (!self.hasScanned) {
-        [self.emptyState showIllustrationWithMessage:@"Scan a folder or your Photos library to find duplicate and blurry photos."];
+/// The start screen until a scan shows its first result. After a finished
+/// scan the results stay, even when empty, so the thresholds are at hand.
+- (void)updateHero {
+    const NSUInteger groups = self.roots.firstObject.children.count;
+    const NSUInteger blurry = self.roots.lastObject.children.count;
+    self.banner.value = [NSString stringWithFormat:@"%lu to review", (unsigned long)(groups + blurry)];
+    self.banner.caption = [NSString stringWithFormat:@"%lu duplicate groups · %lu blurry · %lu photos in %@",
+                                                     (unsigned long)groups, (unsigned long)blurry,
+                                                     (unsigned long)self.items.count, self.sourceLabel.stringValue];
+
+    const BOOL presented = groups + blurry == 0 && (self.model.scanning || !self.hasScanned);
+    [self.hero setPresented:presented];
+    if (!presented) {
+        return;
+    }
+    if (self.model.scanning) {
+        [self.hero showScanningWithStatus:@"Comparing photos and measuring sharpness…"];
     } else {
-        [self.emptyState showIllustrationWithMessage:@"No duplicate or blurry photos found."];
+        [self.hero showIdleWithMessage:@"Scan asks for a folder of photos."];
     }
 }
 
@@ -350,11 +390,12 @@ NSImageView *imageViewWithoutIntrinsicSize() {
                   progress:^(uint64_t done, NSString *current) {
                       weakSelf.statusLabel.stringValue =
                           [NSString stringWithFormat:@"%llu photos · %@", done, current.lastPathComponent];
+                      [weakSelf.hero setStatus:weakSelf.statusLabel.stringValue];
                   }
                 completion:^(NSArray<MCPhotoItem *> *items, NSUInteger skipped) {
                     [weakSelf finishScanWithItems:items skipped:skipped root:root];
                 }];
-    [self updateEmptyState]; // after scanFolder:, so `scanning` is already set
+    [self updateHero]; // after scanFolder:, so `scanning` is already set
 }
 
 - (void)scanLibrary:(id)sender {
@@ -362,6 +403,7 @@ NSImageView *imageViewWithoutIntrinsicSize() {
     __weak MCPhotosViewController *weakSelf = self;
     [self.model scanLibraryWithProgress:^(uint64_t done, NSString *current) {
         weakSelf.statusLabel.stringValue = [NSString stringWithFormat:@"%llu photos · %@", done, current];
+        [weakSelf.hero setStatus:weakSelf.statusLabel.stringValue];
     }
         completion:^(NSArray<MCPhotoItem *> *items, NSUInteger skipped, NSString *error) {
             MCPhotosViewController *strongSelf = weakSelf;
@@ -373,7 +415,7 @@ NSImageView *imageViewWithoutIntrinsicSize() {
                 strongSelf.statusLabel.stringValue = error;
             }
         }];
-    [self updateEmptyState];
+    [self updateHero];
 }
 
 - (void)stopScan:(id)sender {
@@ -500,7 +542,7 @@ NSImageView *imageViewWithoutIntrinsicSize() {
     [self.outlineView expandItem:blurryRoot];
     [self updateTrashButton];
     [self updatePreview];
-    [self updateEmptyState];
+    [self updateHero];
 }
 
 - (void)showSummary {

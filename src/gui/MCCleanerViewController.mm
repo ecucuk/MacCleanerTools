@@ -1,8 +1,9 @@
 #import "MCCleanerViewController.h"
 
-#import "MCEmptyStateView.h"
+#import "MCHeroView.h"
 #import "MCScanModel.h"
 #import "MCTheme.h"
+#import "MCToolBanner.h"
 #import "MCUsageSummaryView.h"
 #import "MacCleanerViz-Swift.h"
 
@@ -73,7 +74,9 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
 @property(nonatomic, strong) NSTextField *statusLabel;
 @property(nonatomic, strong) NSTextField *selectionLabel;
 @property(nonatomic, strong) MCUsageSummaryView *summaryView;
-@property(nonatomic, strong) MCEmptyStateView *emptyState;
+@property(nonatomic, strong) MCHeroView *hero;
+@property(nonatomic, strong) MCToolBanner *banner;
+@property(nonatomic) BOOL hasScanned;
 
 /// Category label -> palette slot, so list rows can match the bar's segments.
 @property(nonatomic, copy) NSDictionary<NSString *, NSNumber *> *slotByCategoryLabel;
@@ -114,8 +117,8 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
     NSView *content = self.view;
 
     // --- top bar ---------------------------------------------------------
-    self.scanButton = [NSButton buttonWithTitle:@"Rescan" target:self action:@selector(rescan:)];
-    self.scanButton.bezelStyle = NSBezelStyleRounded;
+    self.scanButton = [MCGlassButton buttonWithTitle:@"Rescan" style:MCGlassButtonStylePill tool:MCToolCleaner
+                                              target:self action:@selector(rescan:)];
 
     self.activityButton = [NSButton buttonWithTitle:@"Activity" target:self action:@selector(showActivity:)];
     self.activityButton.bezelStyle = NSBezelStyleRounded;
@@ -132,11 +135,10 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
         self.modePopUp.enabled = NO;
     }
 
-    self.cleanButton = [NSButton buttonWithTitle:@"Clean Selected…" target:self action:@selector(clean:)];
-    self.cleanButton.bezelStyle = NSBezelStyleRounded;
+    self.cleanButton = [MCGlassButton buttonWithTitle:@"Clean Selected…" style:MCGlassButtonStylePillPrimary
+                                                tool:MCToolCleaner target:self action:@selector(clean:)];
     self.cleanButton.keyEquivalent = @"\r";
     self.cleanButton.enabled = NO;
-    [MCTheme stylePrimaryButton:self.cleanButton];
 
     self.spinner = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
     self.spinner.style = NSProgressIndicatorStyleSpinning;
@@ -144,7 +146,7 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
     self.spinner.displayedWhenStopped = NO;
 
     NSStackView *topBar = [NSStackView stackViewWithViews:@[
-        self.scanButton, self.activityButton, self.spinner, [self flexibleSpacer], self.modePopUp, self.cleanButton
+        self.activityButton, self.spinner, [self flexibleSpacer], self.modePopUp
     ]];
     topBar.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     topBar.spacing = 8;
@@ -177,8 +179,7 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
     scrollView.autohidesScrollers = YES;
     scrollView.translatesAutoresizingMaskIntoConstraints = NO;
     [MCTheme styleCard:scrollView];
-    self.emptyState = [[MCEmptyStateView alloc] initWithIllustration:@"empty-cleaner"];
-    NSView *card = [self.emptyState wrapCard:scrollView];
+    NSView *card = scrollView;
 
     // --- bottom bar ------------------------------------------------------
     self.statusLabel = [NSTextField labelWithString:@"Ready."];
@@ -198,15 +199,33 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
 
     self.summaryView = [[MCUsageSummaryView alloc] initWithFrame:NSZeroRect];
     self.summaryView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.summaryView.showsHeadline = NO; // the banner carries the total
 
+    // --- results banner and start screen ---------------------------------
+    self.banner = [[MCToolBanner alloc] initWithTool:MCToolCleaner symbol:@"trash"];
+    self.banner.actions = @[ self.scanButton, self.cleanButton ];
+
+    self.hero = [[MCHeroView alloc] initWithTool:MCToolCleaner
+                                          symbol:@"trash"
+                                           title:@"Storage Cleaner"
+                                        subtitle:@"Caches, logs and developer leftovers that are safe to remove."];
+    self.hero.actions = @[ [MCGlassButton buttonWithTitle:@"Scan" style:MCGlassButtonStyleRound tool:MCToolCleaner
+                                                   target:self action:@selector(rescan:)] ];
+
+    [content addSubview:self.banner];
     [content addSubview:topBar];
     [content addSubview:self.summaryView];
     [content addSubview:card];
     [content addSubview:bottomBar];
+    [content addSubview:self.hero];
 
     const CGFloat margin = 16;
     [NSLayoutConstraint activateConstraints:@[
-        [topBar.topAnchor constraintEqualToAnchor:content.topAnchor constant:margin],
+        [self.banner.topAnchor constraintEqualToAnchor:content.safeAreaLayoutGuide.topAnchor constant:8],
+        [self.banner.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:margin],
+        [self.banner.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-margin],
+
+        [topBar.topAnchor constraintEqualToAnchor:self.banner.bottomAnchor constant:12],
         [topBar.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:margin],
         [topBar.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-margin],
 
@@ -222,9 +241,15 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
         [bottomBar.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:margin],
         [bottomBar.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-margin],
         [bottomBar.bottomAnchor constraintEqualToAnchor:content.bottomAnchor constant:-margin],
+
+        [self.hero.topAnchor constraintEqualToAnchor:content.topAnchor],
+        [self.hero.bottomAnchor constraintEqualToAnchor:content.bottomAnchor],
+        [self.hero.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
+        [self.hero.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
     ]];
 
     [self updateSelectionSummary];
+    [self updateHero];
 }
 
 - (NSView *)flexibleSpacer {
@@ -286,6 +311,10 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
             for (MCCategoryNode *category in strongSelf.model.categories) {
                 found += category.sizeBytes;
             }
+            strongSelf.hasScanned = YES;
+            strongSelf.banner.value = humanSize(found);
+            strongSelf.banner.caption = [NSString stringWithFormat:@"reclaimable across %lu categories",
+                                                                   (unsigned long)strongSelf.model.categories.count];
             [strongSelf setBusy:NO
                          status:[NSString stringWithFormat:@"Found %@ across %lu categories.", humanSize(found),
                                                             (unsigned long)strongSelf.model.categories.count]];
@@ -429,18 +458,20 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
         [self.spinner stopAnimation:nil];
         [self updateSelectionSummary];
     }
-    [self updateEmptyState];
+    [self updateHero];
 }
 
-/// Driven by busy changes only, so the card stays as it is until the first
-/// scan starts rather than claiming "nothing to clean" before looking.
-- (void)updateEmptyState {
+/// The start screen until a scan finds something; the results after.
+- (void)updateHero {
     if (self.model.categories.count > 0) {
-        [self.emptyState hide];
-    } else if (self.busy) {
-        [self.emptyState showScanningWithMessage:@"Looking through caches, logs and developer files…"];
+        [self.hero setPresented:NO];
+        return;
+    }
+    [self.hero setPresented:YES];
+    if (self.busy) {
+        [self.hero showScanningWithStatus:@"Looking through caches, logs and developer files…"];
     } else {
-        [self.emptyState showIllustrationWithMessage:@"Nothing to clean. Your Mac is already tidy."];
+        [self.hero showIdleWithMessage:self.hasScanned ? @"Nothing to clean. Your Mac is already tidy." : nil];
     }
 }
 

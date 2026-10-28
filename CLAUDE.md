@@ -44,8 +44,6 @@ ditto build/MacCleaner.app /Applications/MacCleaner.app          # install
 - Icon: `resources/MacCleaner.icns` is committed; regenerate with
   `sh tools/build_icon.sh` (drawn in code by `tools/make_icon.m`, no
   third-party art).
-- Art: `resources/art/` (empty-state PNGs/.kra, `scan.mov`) is committed;
-  regenerate with `sh tools/build_art.sh` (Krita, Blender, ffmpeg).
 
 ## Layout
 

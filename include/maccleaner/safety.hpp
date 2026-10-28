@@ -28,12 +28,19 @@ private:
 //   2. its weakly_canonical resolution is a strict descendant of one of
 //      `allowed.roots()`;
 //   3. it is not equal to, or an ancestor of, any known-dangerous path
-//      (home directory root, "/", SIP-protected system paths);
+//      (home directory root, "/", SIP-protected system paths), and not
+//      inside a Photos library package (see isInsidePhotosLibrary);
 //   4. it is owned by the current effective user (st_uid == geteuid()),
 //      so we never touch files another account (including root) owns even
 //      if they happen to live under a nominally-allowed root.
 // On rejection, `reasonIfUnsafe` (if non-null) is filled with a human
 // readable explanation suitable for CLI output.
+// True if any component of `path` is a Photos library package
+// (*.photoslibrary, case-insensitive). Lexical only. Removing files from a
+// library behind Photos' back corrupts it, so isSafeToDelete rejects these
+// paths and the photo folder scan does not descend into them.
+bool isInsidePhotosLibrary(const std::filesystem::path& path);
+
 bool isSafeToDelete(const std::filesystem::path& candidate,
                      const AllowedRoots& allowed,
                      std::string* reasonIfUnsafe = nullptr);

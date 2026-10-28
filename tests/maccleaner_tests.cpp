@@ -124,6 +124,22 @@ void testSafetyAcceptsDirectChildOfAllowedRoot() {
     CHECK(isSafeToDelete(tree.root() / "child_file.txt", allowed, &reason));
 }
 
+void testSafetyRejectsPhotosLibrary() {
+    ScratchTree tree;
+    writeFileOfSize(tree.root() / "X.PhotosLibrary" / "originals" / "a.jpg", 1);
+    writeFileOfSize(tree.root() / "a.jpg", 1);
+    AllowedRoots allowed;
+    allowed.add(tree.root());
+
+    std::string reason;
+    CHECK(!isSafeToDelete(tree.root() / "X.PhotosLibrary" / "originals" / "a.jpg", allowed, &reason));
+    CHECK(reason.find("Photos library") != std::string::npos);
+    CHECK(!isSafeToDelete(tree.root() / "X.PhotosLibrary", allowed, &reason));
+    CHECK(isSafeToDelete(tree.root() / "a.jpg", allowed, &reason));
+    CHECK(maccleaner::safety::isInsidePhotosLibrary("/u/Pictures/P.photoslibrary/originals/a.jpg"));
+    CHECK(!maccleaner::safety::isInsidePhotosLibrary("/u/Pictures/photoslibrary-notes/a.jpg"));
+}
+
 void testSafetyRejectsPathOutsideAllowedRoot() {
     ScratchTree tree;
     AllowedRoots allowed;
@@ -906,6 +922,7 @@ int main() {
 
     testSafetyAcceptsDirectChildOfAllowedRoot();
     testSafetyRejectsPathOutsideAllowedRoot();
+    testSafetyRejectsPhotosLibrary();
     testSafetyRejectsSymlink();
     testSafetyRejectsRootItself();
     testSafetyRejectsNonexistentPath();

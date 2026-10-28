@@ -3,6 +3,7 @@
 #import "MCCleanerViewController.h"
 #import "MCLargeFilesViewController.h"
 #import "MCPerformanceViewController.h"
+#import "MCPhotosViewController.h"
 
 #pragma mark - Tool registry
 
@@ -143,7 +144,12 @@
         performance.symbolName = @"gauge.with.needle";
         performance.make = ^{ return (NSViewController *)[[MCPerformanceViewController alloc] init]; };
 
-        _tools = @[ cleaner, largeFiles, performance ];
+        MCToolEntry *photoCleaner = [[MCToolEntry alloc] init];
+        photoCleaner.title = @"Photo Cleaner";
+        photoCleaner.symbolName = @"photo.on.rectangle.angled";
+        photoCleaner.make = ^{ return (NSViewController *)[[MCPhotosViewController alloc] init]; };
+
+        _tools = @[ cleaner, largeFiles, photoCleaner, performance ];
 
         _sidebar = [[MCToolSidebarController alloc] init];
         _sidebar.tools = _tools;

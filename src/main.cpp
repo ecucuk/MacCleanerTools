@@ -128,7 +128,7 @@ int runPhotos(const CliOptions& options) {
     for (std::size_t g = 0; g < groups.size(); ++g) {
         std::cout << "  Group " << (g + 1) << "\n";
         for (std::size_t m = 0; m < groups[g].size(); ++m) {
-            printPhoto(m == 0 ? "keep" : "", scan.photos[groups[g][m]]);
+            printPhoto(m == 0 ? "best" : "", scan.photos[groups[g][m]]);
         }
     }
 

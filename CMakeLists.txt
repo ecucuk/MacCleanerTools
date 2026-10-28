@@ -150,6 +150,7 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
         src/gui/MCCleanerViewController.mm
         src/gui/MCLargeFilesViewController.mm
         src/gui/MCPerformanceViewController.mm
+        src/gui/MCPhotosViewController.mm
         src/gui/MCUsageSummaryView.mm
         "${MACCLEANER_VIZ_HEADER_STAGED}"
     )

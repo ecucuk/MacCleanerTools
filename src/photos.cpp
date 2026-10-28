@@ -90,9 +90,14 @@ std::vector<std::vector<std::size_t>> groupDuplicates(const std::vector<PhotoInf
 
     // shortcut: O(n^2) pair scan (~50M popcounts at 10k photos, well under a
     // second); switch to a BK-tree or multi-index hashing above ~50k photos.
+    // Hash 0 means "no structure" (too small to hash, or flat): such photos
+    // would all match each other, so they are never grouped.
     for (std::size_t i = 0; i < photos.size(); ++i) {
+        if (photos[i].hash == 0) {
+            continue;
+        }
         for (std::size_t j = i + 1; j < photos.size(); ++j) {
-            if (hammingDistance(photos[i].hash, photos[j].hash) <= maxDistance) {
+            if (photos[j].hash != 0 && hammingDistance(photos[i].hash, photos[j].hash) <= maxDistance) {
                 parent[find(i)] = find(j);
             }
         }

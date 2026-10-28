@@ -55,7 +55,15 @@ bool grayFromCGImage(CGImageRef image, GrayImage& out) {
 
 bool decodeImageFile(const std::filesystem::path& path, Decoded& out) {
     @autoreleasepool {
-        NSURL *url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:path.c_str()]];
+        // From raw bytes, not NSString: a non-UTF-8 name (possible on SMB or
+        // exFAT) makes stringWithUTF8String return nil and fileURLWithPath throw.
+        const std::string& raw = path.native();
+        NSURL *url = CFBridgingRelease(CFURLCreateFromFileSystemRepresentation(
+            kCFAllocatorDefault, reinterpret_cast<const UInt8 *>(raw.data()), static_cast<CFIndex>(raw.size()),
+            false));
+        if (url == nil) {
+            return false;
+        }
         CGImageSourceRef source = CGImageSourceCreateWithURL((__bridge CFURLRef)url, nullptr);
         if (source == nullptr) {
             return false;

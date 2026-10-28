@@ -923,7 +923,7 @@ void testGroupKeeperOrder() {
 
 void testGroupTransitive() {
     const std::vector<photos::PhotoInfo> infos = {
-        info("a", 0x0, 10, 1, 0), info("b", 0xF, 10, 1, 0), info("c", 0xFF, 10, 1, 0),
+        info("a", 0x100, 10, 1, 0), info("b", 0x10F, 10, 1, 0), info("c", 0x1FF, 10, 1, 0),
         info("far", ~0ull, 10, 1, 0),
     };
     const auto groups = photos::groupDuplicates(infos);
@@ -931,6 +931,13 @@ void testGroupTransitive() {
     if (!groups.empty()) {
         CHECK_EQ(groups[0].size(), 3u);
     }
+}
+
+// dHash is 0 for tiny and flat images; unrelated icons and blank frames
+// must not land in one "duplicate" group.
+void testGroupSkipsUnhashedPhotos() {
+    CHECK(photos::groupDuplicates({info("icon", 0, 4, 1, 0), info("blank", 0, 640, 0, 0)}).empty());
+    CHECK_EQ(photos::groupDuplicates({info("x", 0, 10, 1, 0), info("y", 1, 10, 1, 0)}).size(), 0u);
 }
 
 void testGroupNoPairs() {
@@ -1008,6 +1015,7 @@ int main() {
     testSharpnessBlurLower();
     testGroupKeeperOrder();
     testGroupTransitive();
+    testGroupSkipsUnhashedPhotos();
     testScanPhotoFolderUsesDecoder();
     testGroupNoPairs();
 

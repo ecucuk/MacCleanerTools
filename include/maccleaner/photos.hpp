@@ -52,7 +52,8 @@ double sharpness(const GrayImage& image);
 
 // Groups photos whose hashes are within `maxDistance` of each other,
 // transitively (A~B and B~C put A, B, C in one group). Only groups of two or
-// more are returned. Element 0 of each group is the one to keep: largest
+// more are returned. Photos with hash 0 (tiny or flat images, see dHash) are
+// never grouped. Element 0 of each group is the one to keep: largest
 // pixel count, then sharpest, then oldest known creation date, then id.
 // Groups are ordered by their keeper's id.
 std::vector<std::vector<std::size_t>> groupDuplicates(const std::vector<PhotoInfo>& photos,

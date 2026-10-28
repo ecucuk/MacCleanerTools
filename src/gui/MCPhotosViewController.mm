@@ -78,6 +78,8 @@ NSImageView *imageViewWithoutIntrinsicSize() {
 @property(nonatomic, strong) NSMutableSet<NSString *> *checked; // by identifier
 @property(nonatomic, copy, nullable) NSString *scanRoot;        // nil = library results
 @property(nonatomic) NSUInteger skipped;
+@property(nonatomic, copy, nullable) NSArray<NSArray<MCPhotoItem *> *> *groups; // cache; nil = stale
+@property(nonatomic) NSInteger groupedDistance;
 @property(nonatomic, strong) NSCache<NSString *, NSImage *> *thumbnails;
 
 @property(nonatomic, strong) NSTextField *sourceLabel;
@@ -387,6 +389,11 @@ NSImageView *imageViewWithoutIntrinsicSize() {
 
 #pragma mark - Tree
 
+- (void)setItems:(NSArray<MCPhotoItem *> *)items {
+    _items = [items copy];
+    _groups = nil; // different photos, different groups
+}
+
 - (void)thresholdsChanged:(id)sender {
     [self updateDistanceLabel];
     [self rebuildTree];
@@ -407,8 +414,15 @@ NSImageView *imageViewWithoutIntrinsicSize() {
 /// look at every photo and pick what goes, which may be nothing. Each group's
 /// best copy is only labelled.
 - (void)rebuildTree {
-    NSArray<NSArray<MCPhotoItem *> *> *groups = [self.model groupsOfItems:self.items
-                                                              maxDistance:self.distanceStepper.integerValue];
+    // Grouping is O(n^2); redo it only when the photos or the tolerance
+    // changed, not for blur-threshold edits.
+    // shortcut: still runs on main, ~1 s per tolerance step at ~30k photos;
+    // move to the model's work queue if libraries that big are common.
+    if (self.groups == nil || self.groupedDistance != self.distanceStepper.integerValue) {
+        self.groupedDistance = self.distanceStepper.integerValue;
+        self.groups = [self.model groupsOfItems:self.items maxDistance:self.groupedDistance];
+    }
+    NSArray<NSArray<MCPhotoItem *> *> *groups = self.groups;
 
     NSMutableArray<MCPhotoNode *> *groupNodes = [NSMutableArray arrayWithCapacity:groups.count];
     for (NSUInteger g = 0; g < groups.count; ++g) {
@@ -448,6 +462,15 @@ NSImageView *imageViewWithoutIntrinsicSize() {
     blurryRoot.title = [NSString stringWithFormat:@"Blurry (%lu)", (unsigned long)blurryLeaves.count];
     blurryRoot.children = blurryLeaves;
     self.roots = @[ duplicates, blurryRoot ];
+
+    // A check on a row that a threshold change just hid must not survive:
+    // Move to Trash would remove a photo the user can no longer see.
+    NSMutableSet<NSString *> *visible = [NSMutableSet set];
+    for (NSArray<MCPhotoItem *> *group in groups) {
+        [visible addObjectsFromArray:[group valueForKey:@"identifier"]];
+    }
+    [visible addObjectsFromArray:[blurry valueForKey:@"identifier"]];
+    [self.checked intersectSet:visible];
 
     [self.outlineView reloadData];
     [self.outlineView expandItem:duplicates expandChildren:YES];

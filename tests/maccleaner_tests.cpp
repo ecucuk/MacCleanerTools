@@ -6,11 +6,13 @@
 #include "maccleaner/bigfiles.hpp"
 #include "maccleaner/cleaner.hpp"
 #include "maccleaner/optimizer.hpp"
+#include "maccleaner/photos.hpp"
 #include "maccleaner/processes.hpp"
 #include "maccleaner/cli.hpp"
 #include "maccleaner/format.hpp"
 #include "maccleaner/safety.hpp"
 #include "maccleaner/scanner.hpp"
+#include "maccleaner/walk.hpp"
 
 #include <algorithm>
 #include <fstream>
@@ -122,6 +124,22 @@ void testSafetyAcceptsDirectChildOfAllowedRoot() {
     std::string reason;
     CHECK(isSafeToDelete(tree.root() / "child_dir", allowed, &reason));
     CHECK(isSafeToDelete(tree.root() / "child_file.txt", allowed, &reason));
+}
+
+void testSafetyRejectsPhotosLibrary() {
+    ScratchTree tree;
+    writeFileOfSize(tree.root() / "X.PhotosLibrary" / "originals" / "a.jpg", 1);
+    writeFileOfSize(tree.root() / "a.jpg", 1);
+    AllowedRoots allowed;
+    allowed.add(tree.root());
+
+    std::string reason;
+    CHECK(!isSafeToDelete(tree.root() / "X.PhotosLibrary" / "originals" / "a.jpg", allowed, &reason));
+    CHECK(reason.find("Photos library") != std::string::npos);
+    CHECK(!isSafeToDelete(tree.root() / "X.PhotosLibrary", allowed, &reason));
+    CHECK(isSafeToDelete(tree.root() / "a.jpg", allowed, &reason));
+    CHECK(maccleaner::safety::isInsidePhotosLibrary("/u/Pictures/P.photoslibrary/originals/a.jpg"));
+    CHECK(!maccleaner::safety::isInsidePhotosLibrary("/u/Pictures/photoslibrary-notes/a.jpg"));
 }
 
 void testSafetyRejectsPathOutsideAllowedRoot() {
@@ -571,6 +589,27 @@ void testCliParsesBigFiles() {
     CHECK(options->under == "/tmp");
     CHECK_EQ(options->minSizeBytes, 500ull << 20);
     CHECK_EQ(options->top, 25u);
+}
+
+void testCliParsesPhotos() {
+    CliParseError error;
+    const char* argv[] = {"mac_cleaner", "photos", "--under=/tmp", "--distance=4", "--blur=55.5"};
+    const auto options = parseArgs(5, const_cast<char**>(argv), error);
+    CHECK(options.has_value());
+    CHECK(options->command == Command::Photos);
+    CHECK(options->under == "/tmp");
+    CHECK_EQ(options->distance, 4);
+    CHECK_EQ(options->blurThreshold, 55.5);
+
+    const char* defaults[] = {"mac_cleaner", "photos"};
+    const auto plain = parseArgs(2, const_cast<char**>(defaults), error);
+    CHECK_EQ(plain->distance, maccleaner::photos::kDefaultMaxDistance);
+    CHECK_EQ(plain->blurThreshold, maccleaner::photos::kDefaultBlurThreshold);
+
+    const char* bad[] = {"mac_cleaner", "photos", "--distance=x"};
+    CHECK(!parseArgs(3, const_cast<char**>(bad), error).has_value());
+    const char* tooFar[] = {"mac_cleaner", "photos", "--distance=65"};
+    CHECK(!parseArgs(3, const_cast<char**>(tooFar), error).has_value());
 }
 
 // --- processes ----------------------------------------------------------
@@ -1114,11 +1153,174 @@ void testCliHelpShortCircuits() {
 
 } // namespace
 
+// --- walk ---------------------------------------------------------------
+
+void testWalkFilesSkipsFilteredDirs() {
+    SizedTree tree;
+    writeFileOfSize(tree.top() / "Lib.photoslibrary" / "originals" / "b.jpg", 1);
+
+    std::vector<fs::path> seen;
+    maccleaner::walkFiles(
+        tree.top(), [&](const fs::path& path, const struct stat&) { seen.push_back(path); },
+        nullptr, {}, [](const fs::path& dir) { return dir.extension() != ".photoslibrary"; });
+
+    CHECK_EQ(seen.size(), 3u); // big.bin, small.bin, loose.bin
+    CHECK(std::none_of(seen.begin(), seen.end(),
+                       [](const fs::path& p) { return p.filename() == "b.jpg"; }));
+}
+
+// --- photos -------------------------------------------------------------
+
+namespace photos = maccleaner::photos;
+
+photos::GrayImage makeImage(int width, int height, int (*pixel)(int x, int y)) {
+    photos::GrayImage image{width, height, std::vector<std::uint8_t>(static_cast<std::size_t>(width * height))};
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            image.pixels[static_cast<std::size_t>(y * width + x)] =
+                static_cast<std::uint8_t>(std::clamp(pixel(x, y), 0, 255));
+        }
+    }
+    return image;
+}
+
+// Ramp with a 28 px square wave on top: wider than one 9x8 cell, so the
+// cells are not monotone and dHash gets both 0 and 1 bits.
+int rampPixel(int x, int y) { return x * 2 + ((x / 14) % 2) * 80 + y; }
+int rampMirroredPixel(int x, int y) { return rampPixel(63 - x, y); }
+int rampBrighterPixel(int x, int y) { return rampPixel(x, y) + 20; }
+int checkerPixel(int x, int y) { return ((x / 4 + y / 4) % 2) ? 255 : 0; }
+
+photos::GrayImage boxBlur(const photos::GrayImage& in) {
+    photos::GrayImage out = in;
+    for (int y = 1; y + 1 < in.height; ++y) {
+        for (int x = 1; x + 1 < in.width; ++x) {
+            int sum = 0;
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    sum += in.pixels[static_cast<std::size_t>((y + dy) * in.width + x + dx)];
+                }
+            }
+            out.pixels[static_cast<std::size_t>(y * in.width + x)] = static_cast<std::uint8_t>(sum / 9);
+        }
+    }
+    return out;
+}
+
+void testDHashIdentical() {
+    const auto image = makeImage(64, 64, rampPixel);
+    CHECK_EQ(photos::hammingDistance(photos::dHash(image), photos::dHash(image)), 0);
+    CHECK(photos::dHash(image) != 0);
+}
+
+void testDHashBrightnessShift() {
+    const auto a = photos::dHash(makeImage(64, 64, rampPixel));
+    const auto b = photos::dHash(makeImage(64, 64, rampBrighterPixel));
+    CHECK(photos::hammingDistance(a, b) <= 2);
+}
+
+void testDHashMirrored() {
+    const auto a = photos::dHash(makeImage(64, 64, rampPixel));
+    const auto b = photos::dHash(makeImage(64, 64, rampMirroredPixel));
+    CHECK(photos::hammingDistance(a, b) >= 32);
+}
+
+void testPhotoMetricsOnTinyImages() {
+    CHECK_EQ(photos::dHash(makeImage(4, 4, rampPixel)), 0u);
+    CHECK_EQ(photos::sharpness(makeImage(2, 2, checkerPixel)), 0.0);
+    CHECK_EQ(photos::dHash(photos::GrayImage{}), 0u);
+}
+
+void testSharpnessBlurLower() {
+    const auto sharp = makeImage(64, 64, checkerPixel);
+    CHECK(photos::sharpness(sharp) > 4 * photos::sharpness(boxBlur(sharp)));
+}
+
+photos::PhotoInfo info(std::string id, std::uint64_t hash, int side, double sharpness, std::int64_t created) {
+    photos::PhotoInfo p;
+    p.id = std::move(id);
+    p.hash = hash;
+    p.pixelWidth = side;
+    p.pixelHeight = side;
+    p.sharpness = sharpness;
+    p.createdUnix = created;
+    return p;
+}
+
+void testGroupKeeperOrder() {
+    const std::vector<photos::PhotoInfo> infos = {
+        info("small", 7, 100, 50, 1000),
+        info("big-blurry", 7, 200, 5, 1000),
+        info("big-sharp", 7, 200, 9, 3000),
+        info("big-sharp-older", 7, 200, 9, 2000),
+    };
+    const auto groups = photos::groupDuplicates(infos);
+    CHECK_EQ(groups.size(), 1u);
+    if (groups.size() == 1) {
+        CHECK_EQ(groups[0].size(), 4u);
+        CHECK_EQ(infos[groups[0][0]].id, std::string("big-sharp-older"));
+    }
+}
+
+void testGroupTransitive() {
+    const std::vector<photos::PhotoInfo> infos = {
+        info("a", 0x100, 10, 1, 0), info("b", 0x10F, 10, 1, 0), info("c", 0x1FF, 10, 1, 0),
+        info("far", ~0ull, 10, 1, 0),
+    };
+    const auto groups = photos::groupDuplicates(infos);
+    CHECK_EQ(groups.size(), 1u);
+    if (!groups.empty()) {
+        CHECK_EQ(groups[0].size(), 3u);
+    }
+}
+
+// dHash is 0 for tiny and flat images; unrelated icons and blank frames
+// must not land in one "duplicate" group.
+void testGroupSkipsUnhashedPhotos() {
+    CHECK(photos::groupDuplicates({info("icon", 0, 4, 1, 0), info("blank", 0, 640, 0, 0)}).empty());
+    CHECK_EQ(photos::groupDuplicates({info("x", 0, 10, 1, 0), info("y", 1, 10, 1, 0)}).size(), 0u);
+}
+
+void testGroupNoPairs() {
+    CHECK(photos::groupDuplicates({}).empty());
+    CHECK(photos::groupDuplicates({info("only", 1, 10, 1, 0)}).empty());
+}
+
+void testScanPhotoFolderUsesDecoder() {
+    SizedTree tree;
+    for (const char* name : {"a.jpg", "sub/b.JPG", "notes.txt", "bad.png", "L.photoslibrary/originals/x.jpg"}) {
+        writeFileOfSize(tree.top() / name, 1);
+    }
+
+    const auto fakeDecode = [](const fs::path& path, photos::Decoded& out) {
+        if (path.filename() == "bad.png") {
+            return false;
+        }
+        out.gray = makeImage(64, 64, rampPixel);
+        out.pixelWidth = 640;
+        out.pixelHeight = 480;
+        return true;
+    };
+    const photos::FolderScan scan = photos::scanPhotoFolder(tree.top(), nullptr, {}, fakeDecode);
+
+    CHECK_EQ(scan.photos.size(), 2u);
+    CHECK_EQ(scan.undecodable, 1u);
+    for (const auto& photo : scan.photos) {
+        CHECK(photo.id.find("photoslibrary") == std::string::npos);
+        CHECK_EQ(photo.pixelWidth, 640);
+        CHECK_EQ(photo.sizeBytes, 1u);
+        CHECK(photo.hash == photos::dHash(makeImage(64, 64, rampPixel)));
+    }
+    CHECK(photos::isPhotoExtension("x.HEIC"));
+    CHECK(!photos::isPhotoExtension("x.txt"));
+}
+
 int main() {
     testHumanReadableBytes();
 
     testSafetyAcceptsDirectChildOfAllowedRoot();
     testSafetyRejectsPathOutsideAllowedRoot();
+    testSafetyRejectsPhotosLibrary();
     testSafetyRejectsSymlink();
     testSafetyRejectsRootItself();
     testSafetyRejectsNonexistentPath();
@@ -1145,6 +1347,18 @@ int main() {
     testBigFilesIgnoresSymlinks();
     testBigFilesStreamsResults();
     testBigFilesCancellation();
+    testWalkFilesSkipsFilteredDirs();
+
+    testDHashIdentical();
+    testDHashBrightnessShift();
+    testDHashMirrored();
+    testPhotoMetricsOnTinyImages();
+    testSharpnessBlurLower();
+    testGroupKeeperOrder();
+    testGroupTransitive();
+    testGroupSkipsUnhashedPhotos();
+    testScanPhotoFolderUsesDecoder();
+    testGroupNoPairs();
 
     testClassifyProcess();
     testDiffProcessSamplesComputesCpuPercent();
@@ -1178,6 +1392,7 @@ int main() {
     testCliRejectsPermanentWithoutApply();
     testCliHelpShortCircuits();
     testCliParsesBigFiles();
+    testCliParsesPhotos();
     testCliParsesOptimize();
 
     if (g_failures == 0) {

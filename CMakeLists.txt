@@ -46,6 +46,8 @@ set(MACCLEANER_CORE_SOURCES
     src/processes.cpp
     src/optimizer.cpp
     src/cli.cpp
+    src/walk.cpp
+    src/photos.cpp
 )
 
 set(MACCLEANER_APPLE_SOURCES)
@@ -53,6 +55,11 @@ if(APPLE AND MACCLEANER_USE_NATIVE_TRASH)
     list(APPEND MACCLEANER_APPLE_SOURCES src/platform/trash_mac.mm)
 else()
     list(APPEND MACCLEANER_APPLE_SOURCES src/platform/trash_fallback.cpp)
+endif()
+if(APPLE)
+    list(APPEND MACCLEANER_APPLE_SOURCES src/platform/image_mac.mm)
+else()
+    list(APPEND MACCLEANER_APPLE_SOURCES src/platform/image_fallback.cpp)
 endif()
 
 add_library(maccleaner_core STATIC
@@ -71,6 +78,17 @@ if(APPLE AND MACCLEANER_USE_NATIVE_TRASH)
     find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
     target_link_libraries(maccleaner_core PRIVATE ${FOUNDATION_FRAMEWORK})
     set_source_files_properties(src/platform/trash_mac.mm PROPERTIES
+        COMPILE_FLAGS "-fobjc-arc"
+    )
+endif()
+
+if(APPLE)
+    find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
+    find_library(IMAGEIO_FRAMEWORK ImageIO REQUIRED)
+    find_library(COREGRAPHICS_FRAMEWORK CoreGraphics REQUIRED)
+    target_link_libraries(maccleaner_core PRIVATE
+        ${FOUNDATION_FRAMEWORK} ${IMAGEIO_FRAMEWORK} ${COREGRAPHICS_FRAMEWORK})
+    set_source_files_properties(src/platform/image_mac.mm PROPERTIES
         COMPILE_FLAGS "-fobjc-arc"
     )
 endif()
@@ -132,10 +150,12 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
         src/gui/MCScanModel.mm
         src/gui/MCBigFilesModel.mm
         src/gui/MCProcessModel.mm
+        src/gui/MCPhotoModel.mm
         src/gui/MCMainWindowController.mm
         src/gui/MCCleanerViewController.mm
         src/gui/MCLargeFilesViewController.mm
         src/gui/MCPerformanceViewController.mm
+        src/gui/MCPhotosViewController.mm
         src/gui/MCOptimizeSheetController.mm
         src/gui/MCUsageSummaryView.mm
         "${MACCLEANER_VIZ_HEADER_STAGED}"
@@ -169,8 +189,11 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
     # UniformTypeIdentifiers supplies the UTType media gate in front of it.
     find_library(QUARTZ_FRAMEWORK Quartz REQUIRED)
     find_library(UTTYPE_FRAMEWORK UniformTypeIdentifiers REQUIRED)
+    # Photos supplies PhotoKit (the Photo Cleaner's library source).
+    find_library(PHOTOS_FRAMEWORK Photos REQUIRED)
     target_link_libraries(MacCleaner PRIVATE
-        ${COCOA_FRAMEWORK} ${QUARTZ_FRAMEWORK} ${UTTYPE_FRAMEWORK})
+        ${COCOA_FRAMEWORK} ${QUARTZ_FRAMEWORK} ${UTTYPE_FRAMEWORK}
+        ${PHOTOS_FRAMEWORK} ${IMAGEIO_FRAMEWORK})
 
     target_compile_options(MacCleaner PRIVATE -fobjc-arc)
 

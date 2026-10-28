@@ -6,6 +6,8 @@
 #include <functional>
 #include <vector>
 
+#include "maccleaner/walk.hpp"
+
 namespace maccleaner {
 
 // One file found by findBigFiles. Always a regular file -- directories,
@@ -26,7 +28,7 @@ struct BigFileScanOptions {
 // `visited` counts files+dirs seen so far, `currentDir` is the directory
 // being walked. Frequency is bounded (roughly once per directory) so it is
 // safe to marshal to a UI queue.
-using BigFileProgress = std::function<void(std::uint64_t visited, const std::filesystem::path& currentDir)>;
+using BigFileProgress = WalkProgress;
 
 // Called from the scanning thread every time the running top-N list changes
 // (a qualifying file was inserted, possibly evicting the smallest). The

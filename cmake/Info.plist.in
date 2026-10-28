@@ -30,6 +30,8 @@
 	<string>11.0</string>
 	<!-- The app reads and deletes inside the user's own Library/cache
 	     directories, so it must not be sandboxed into a container. -->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>MacCleaner looks for duplicate and blurry photos in your library. Nothing is removed unless you choose it.</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.utilities</string>
 </dict>

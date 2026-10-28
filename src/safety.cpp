@@ -3,6 +3,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
+#include <cctype>
 #include <system_error>
 
 namespace maccleaner::safety {
@@ -79,6 +81,18 @@ bool touchesHomeDirectoryItself(const fs::path& resolved) {
 
 } // namespace
 
+bool isInsidePhotosLibrary(const fs::path& path) {
+    for (const fs::path& component : path) {
+        std::string extension = component.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (extension == ".photoslibrary") {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool isSafeToDelete(const fs::path& candidate, const AllowedRoots& allowed, std::string* reasonIfUnsafe) {
     auto reject = [&](const std::string& reason) {
         if (reasonIfUnsafe != nullptr) {
@@ -138,6 +152,12 @@ bool isSafeToDelete(const fs::path& candidate, const AllowedRoots& allowed, std:
     //     for why this is a narrower check than the system-container one above).
     if (touchesHomeDirectoryItself(resolved)) {
         return reject("refusing to delete the home directory itself");
+    }
+
+    // 3c. Never reach into a Photos library package; its assets are deleted
+    //     through PhotoKit instead.
+    if (isInsidePhotosLibrary(resolved)) {
+        return reject("inside a Photos library package (delete it from Photos instead): " + resolved.string());
     }
 
     // 4. Must be owned by the current effective user.

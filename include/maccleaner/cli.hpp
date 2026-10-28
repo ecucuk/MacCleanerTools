@@ -1,5 +1,6 @@
 #pragma once
 
+#include "maccleaner/photos.hpp"
 #include "maccleaner/types.hpp"
 
 #include <optional>
@@ -13,6 +14,7 @@ enum class Command {
     Clean,      // scan, then prompt/act according to options
     BigFiles,   // list the largest files under a root
     Processes,  // list the current user's processes by CPU/memory
+    Photos,     // report duplicate and blurry photos under a root
     Optimize,   // find (and with --apply, terminate) reclaimable processes
     Help,
 };
@@ -32,6 +34,10 @@ struct CliOptions {
 
     // processes options.
     std::string sortKey; // "cpu" (default) or "mem"
+
+    // photos options (`under` is shared with bigfiles).
+    int distance = photos::kDefaultMaxDistance;
+    double blurThreshold = photos::kDefaultBlurThreshold;
 };
 
 struct CliParseError {

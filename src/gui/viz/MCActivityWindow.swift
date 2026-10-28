@@ -68,6 +68,22 @@ private func humanBytes(_ bytes: UInt64) -> String {
     return unit == 0 ? "\(Int(value)) \(units[unit])" : String(format: "%.1f %@", value, units[unit])
 }
 
+/// The brand gradient's two ends: the same values as MCTheme on the ObjC
+/// side, which this Swift library cannot import. Lighter in dark mode.
+private enum Brand {
+    static let blue = dynamic(light: 0x1c5ced, dark: 0x3d7bff)
+    static let teal = dynamic(light: 0x21b5de, dark: 0x3cc8ee)
+    static let gradient = LinearGradient(colors: [blue, teal], startPoint: .leading, endPoint: .trailing)
+
+    private static func dynamic(light: UInt32, dark: UInt32) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            let rgb = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
+            return NSColor(srgbRed: CGFloat((rgb >> 16) & 0xff) / 255, green: CGFloat((rgb >> 8) & 0xff) / 255,
+                           blue: CGFloat(rgb & 0xff) / 255, alpha: 1)
+        })
+    }
+}
+
 // MARK: - Views
 
 private struct CategoryBarsView: View {
@@ -100,8 +116,8 @@ private struct CategoryBarsView: View {
                             ZStack(alignment: .leading) {
                                 Capsule().fill(.quaternary)
                                 Capsule()
-                                    .fill(row.scanning ? AnyShapeStyle(.tint.opacity(0.5))
-                                                        : AnyShapeStyle(.tint))
+                                    .fill(Brand.gradient)
+                                    .opacity(row.scanning ? 0.5 : 1)
                                     .frame(width: max(3, geo.size.width * CGFloat(row.bytes) / CGFloat(maxBytes)))
                             }
                         }
@@ -282,7 +298,7 @@ public final class MCActivityBridge: NSObject {
             return
         }
 
-        let hosting = NSHostingController(rootView: ActivityRootView(state: state))
+        let hosting = NSHostingController(rootView: ActivityRootView(state: state).tint(Brand.blue))
         let window = NSWindow(contentViewController: hosting)
         window.title = "Activity"
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]

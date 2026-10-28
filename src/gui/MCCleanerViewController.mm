@@ -1,6 +1,8 @@
 #import "MCCleanerViewController.h"
 
+#import "MCEmptyStateView.h"
 #import "MCScanModel.h"
+#import "MCTheme.h"
 #import "MCUsageSummaryView.h"
 #import "MacCleanerViz-Swift.h"
 
@@ -71,6 +73,7 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
 @property(nonatomic, strong) NSTextField *statusLabel;
 @property(nonatomic, strong) NSTextField *selectionLabel;
 @property(nonatomic, strong) MCUsageSummaryView *summaryView;
+@property(nonatomic, strong) MCEmptyStateView *emptyState;
 
 /// Category label -> palette slot, so list rows can match the bar's segments.
 @property(nonatomic, copy) NSDictionary<NSString *, NSNumber *> *slotByCategoryLabel;
@@ -133,6 +136,7 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
     self.cleanButton.bezelStyle = NSBezelStyleRounded;
     self.cleanButton.keyEquivalent = @"\r";
     self.cleanButton.enabled = NO;
+    [MCTheme stylePrimaryButton:self.cleanButton];
 
     self.spinner = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
     self.spinner.style = NSProgressIndicatorStyleSpinning;
@@ -151,7 +155,6 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
     self.outlineView.dataSource = self;
     self.outlineView.delegate = self;
     self.outlineView.rowSizeStyle = NSTableViewRowSizeStyleDefault;
-    self.outlineView.usesAlternatingRowBackgroundColors = YES;
     self.outlineView.allowsMultipleSelection = NO;
     self.outlineView.indentationPerLevel = 16;
 
@@ -172,8 +175,10 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
     scrollView.documentView = self.outlineView;
     scrollView.hasVerticalScroller = YES;
     scrollView.autohidesScrollers = YES;
-    scrollView.borderType = NSBezelBorder;
     scrollView.translatesAutoresizingMaskIntoConstraints = NO;
+    [MCTheme styleCard:scrollView];
+    self.emptyState = [[MCEmptyStateView alloc] initWithIllustration:@"empty-cleaner"];
+    NSView *card = [self.emptyState wrapCard:scrollView];
 
     // --- bottom bar ------------------------------------------------------
     self.statusLabel = [NSTextField labelWithString:@"Ready."];
@@ -196,7 +201,7 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
 
     [content addSubview:topBar];
     [content addSubview:self.summaryView];
-    [content addSubview:scrollView];
+    [content addSubview:card];
     [content addSubview:bottomBar];
 
     const CGFloat margin = 16;
@@ -209,11 +214,11 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
         [self.summaryView.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:margin],
         [self.summaryView.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-margin],
 
-        [scrollView.topAnchor constraintEqualToAnchor:self.summaryView.bottomAnchor constant:14],
-        [scrollView.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:margin],
-        [scrollView.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-margin],
+        [card.topAnchor constraintEqualToAnchor:self.summaryView.bottomAnchor constant:14],
+        [card.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:margin],
+        [card.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-margin],
 
-        [bottomBar.topAnchor constraintEqualToAnchor:scrollView.bottomAnchor constant:12],
+        [bottomBar.topAnchor constraintEqualToAnchor:card.bottomAnchor constant:12],
         [bottomBar.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:margin],
         [bottomBar.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-margin],
         [bottomBar.bottomAnchor constraintEqualToAnchor:content.bottomAnchor constant:-margin],
@@ -424,6 +429,19 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
         [self.spinner stopAnimation:nil];
         [self updateSelectionSummary];
     }
+    [self updateEmptyState];
+}
+
+/// Driven by busy changes only, so the card stays as it is until the first
+/// scan starts rather than claiming "nothing to clean" before looking.
+- (void)updateEmptyState {
+    if (self.model.categories.count > 0) {
+        [self.emptyState hide];
+    } else if (self.busy) {
+        [self.emptyState showScanningWithMessage:@"Looking through caches, logs and developer files…"];
+    } else {
+        [self.emptyState showIllustrationWithMessage:@"Nothing to clean. Your Mac is already tidy."];
+    }
 }
 
 - (void)updateSelectionSummary {
@@ -540,6 +558,9 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
         checkbox = [NSButton checkboxWithTitle:@"" target:self action:@selector(toggleItem:)];
         checkbox.translatesAutoresizingMaskIntoConstraints = NO;
         checkbox.tag = kCheckboxTag;
+        // Title-less, so it must not be the view that stretches to fill the row.
+        [checkbox setContentHuggingPriority:NSLayoutPriorityRequired
+                             forOrientation:NSLayoutConstraintOrientationHorizontal];
         [cell addSubview:checkbox];
 
         // Plain NSView has no settable tag, so this one is found by class below.

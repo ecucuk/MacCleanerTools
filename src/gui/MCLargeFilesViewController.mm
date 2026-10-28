@@ -1,6 +1,8 @@
 #import "MCLargeFilesViewController.h"
 
 #import "MCBigFilesModel.h"
+#import "MCEmptyStateView.h"
+#import "MCTheme.h"
 
 // Quartz brings QLPreviewView: one view that renders what Finder's Quick
 // Look renders (HEIC/RAW images, video with playback controls, audio),
@@ -86,6 +88,7 @@ constexpr NSUInteger kMaxResults = 200;
 // Preview pane: Quick Look for media/photo selections, a placeholder
 // (icon + caption) for everything else.
 @property(nonatomic, strong) QLPreviewView *previewView;
+@property(nonatomic, strong) MCEmptyStateView *emptyState;
 @property(nonatomic, strong) NSStackView *placeholderStack;
 @property(nonatomic, strong) NSImageView *placeholderIcon;
 @property(nonatomic, strong) NSTextField *placeholderLabel;
@@ -133,6 +136,7 @@ constexpr NSUInteger kMaxResults = 200;
     self.scanButton = [NSButton buttonWithTitle:@"Scan" target:self action:@selector(scanOrCancel:)];
     self.scanButton.bezelStyle = NSBezelStyleRounded;
     self.scanButton.keyEquivalent = @"\r";
+    [MCTheme stylePrimaryButton:self.scanButton];
 
     self.spinner = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
     self.spinner.style = NSProgressIndicatorStyleSpinning;
@@ -150,7 +154,6 @@ constexpr NSUInteger kMaxResults = 200;
     self.tableView = [[MCQuickLookTableView alloc] initWithFrame:NSZeroRect];
     self.tableView.dataSource = self;
     self.tableView.delegate = self;
-    self.tableView.usesAlternatingRowBackgroundColors = YES;
     self.tableView.allowsMultipleSelection = YES;
     self.tableView.doubleAction = @selector(revealSelection:);
     self.tableView.target = self;
@@ -177,7 +180,9 @@ constexpr NSUInteger kMaxResults = 200;
     scrollView.documentView = self.tableView;
     scrollView.hasVerticalScroller = YES;
     scrollView.autohidesScrollers = YES;
-    scrollView.borderType = NSBezelBorder;
+    [MCTheme styleCard:scrollView];
+    self.emptyState = [[MCEmptyStateView alloc] initWithIllustration:@"empty-large-files"];
+    NSView *card = [self.emptyState wrapCard:scrollView];
 
     // --- preview pane ----------------------------------------------------
     self.previewView = [[QLPreviewView alloc] initWithFrame:NSZeroRect
@@ -230,7 +235,7 @@ constexpr NSUInteger kMaxResults = 200;
     NSSplitView *splitView = [[NSSplitView alloc] initWithFrame:NSZeroRect];
     splitView.vertical = YES;
     splitView.dividerStyle = NSSplitViewDividerStyleThin;
-    [splitView addArrangedSubview:scrollView];
+    [splitView addArrangedSubview:card];
     [splitView addArrangedSubview:previewContainer];
     // The preview holds its width; the table absorbs window resizes. The
     // divider position survives relaunches via the autosave name.
@@ -296,6 +301,19 @@ constexpr NSUInteger kMaxResults = 200;
     ]];
 
     [self updatePreview];
+    [self updateEmptyState];
+}
+
+- (void)updateEmptyState {
+    if (self.items.count > 0) {
+        [self.emptyState hide];
+    } else if (self.model.scanning) {
+        [self.emptyState showScanningWithMessage:@"Walking the folder for large files…"];
+    } else if (self.scanRoot == nil) {
+        [self.emptyState showIllustrationWithMessage:@"Choose a folder and press Scan."];
+    } else {
+        [self.emptyState showIllustrationWithMessage:@"No files at or above the threshold."];
+    }
 }
 
 - (void)dealloc {
@@ -373,6 +391,7 @@ constexpr NSUInteger kMaxResults = 200;
                   }
              resultsUpdate:^(NSArray<MCBigFileItem *> *files) {
                  [weakSelf applyStreamedItems:files];
+                 [weakSelf updateEmptyState];
              }
                 completion:^(NSArray<MCBigFileItem *> *files) {
                     MCLargeFilesViewController *strongSelf = weakSelf;
@@ -399,7 +418,9 @@ constexpr NSUInteger kMaxResults = 200;
                                                           (unsigned long)files.count, humanSize(total)];
                     [strongSelf updateActionButtons];
                     [strongSelf updatePreview];
+                    [strongSelf updateEmptyState];
                 }];
+    [self updateEmptyState]; // after scanUnder:, so `scanning` is already set
 }
 
 /// Streams a mid-scan snapshot into the table. Selection is preserved by
@@ -521,6 +542,7 @@ constexpr NSUInteger kMaxResults = 200;
     self.items = remaining;
     [self.tableView reloadData];
     [self updateActionButtons];
+    [self updateEmptyState];
     // The previewed file may be the one just trashed; QLPreviewView keeps
     // videos open, so drop the item rather than previewing a Trash entry.
     [self updatePreview];

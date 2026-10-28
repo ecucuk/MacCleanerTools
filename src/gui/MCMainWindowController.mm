@@ -4,6 +4,7 @@
 #import "MCLargeFilesViewController.h"
 #import "MCPerformanceViewController.h"
 #import "MCPhotosViewController.h"
+#import "MCTheme.h"
 
 #pragma mark - Tool registry
 
@@ -11,6 +12,7 @@
 /// selection so tools the user never opens cost nothing.
 @interface MCToolEntry : NSObject
 @property(nonatomic, copy) NSString *title;
+@property(nonatomic, copy) NSString *subtitle;
 @property(nonatomic, copy) NSString *symbolName;
 @property(nonatomic, copy) NSViewController * (^make)(void);
 @property(nonatomic, strong, nullable) NSViewController *controller;
@@ -41,7 +43,7 @@
     self.tableView.delegate = self;
     self.tableView.headerView = nil;
     self.tableView.style = NSTableViewStyleSourceList;
-    self.tableView.rowHeight = 28;
+    self.tableView.rowHeight = 32;
     self.tableView.allowsEmptySelection = NO;
 
     NSTableColumn *column = [[NSTableColumn alloc] initWithIdentifier:@"tool"];
@@ -50,8 +52,16 @@
     NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 200, 400)];
     scroll.documentView = self.tableView;
     scroll.hasVerticalScroller = YES;
+    scroll.autohidesScrollers = YES;
     scroll.drawsBackground = NO;
     self.view = scroll;
+}
+
+// The one column must follow the sidebar's width, or titles truncate at the
+// column's default 100 pt.
+- (void)viewDidLayout {
+    [super viewDidLayout];
+    [self.tableView sizeLastColumnToFit];
 }
 
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {
@@ -80,9 +90,9 @@
         [NSLayoutConstraint activateConstraints:@[
             [icon.leadingAnchor constraintEqualToAnchor:cell.leadingAnchor constant:4],
             [icon.centerYAnchor constraintEqualToAnchor:cell.centerYAnchor],
-            [icon.widthAnchor constraintEqualToConstant:18],
-            [icon.heightAnchor constraintEqualToConstant:18],
-            [label.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:6],
+            [icon.widthAnchor constraintEqualToConstant:22],
+            [icon.heightAnchor constraintEqualToConstant:22],
+            [label.leadingAnchor constraintEqualToAnchor:icon.trailingAnchor constant:8],
             [label.trailingAnchor constraintEqualToAnchor:cell.trailingAnchor constant:-4],
             [label.centerYAnchor constraintEqualToAnchor:cell.centerYAnchor],
         ]];
@@ -90,8 +100,7 @@
 
     MCToolEntry *tool = self.tools[(NSUInteger)row];
     cell.textField.stringValue = tool.title;
-    cell.imageView.image = [NSImage imageWithSystemSymbolName:tool.symbolName
-                                      accessibilityDescription:tool.title];
+    cell.imageView.image = [MCTheme badgeWithSymbol:tool.symbolName size:22];
     return cell;
 }
 
@@ -106,7 +115,7 @@
 
 #pragma mark - Shell
 
-@interface MCMainWindowController () <MCToolSidebarDelegate, NSWindowDelegate>
+@interface MCMainWindowController () <MCToolSidebarDelegate, NSWindowDelegate, NSToolbarDelegate>
 @property(nonatomic, strong) MCToolSidebarController *sidebar;
 @property(nonatomic, strong) NSViewController *contentHost; // swaps tool views
 @property(nonatomic, copy) NSArray<MCToolEntry *> *tools;
@@ -120,32 +129,44 @@
     NSWindow *window = [[NSWindow alloc]
         initWithContentRect:NSMakeRect(0, 0, 920, 560)
                   styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
-                             NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable
+                             NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable |
+                             NSWindowStyleMaskFullSizeContentView
                     backing:NSBackingStoreBuffered
                       defer:NO];
     window.title = @"MacCleaner";
     window.minSize = NSMakeSize(760, 420);
+    window.toolbarStyle = NSWindowToolbarStyleUnified;
     [window center];
 
     if ((self = [super initWithWindow:window])) {
         window.delegate = self;
+        // A unified toolbar carries the tool's title and description; the
+        // sidebar tracking separator keeps them over the content column.
+        NSToolbar *toolbar = [[NSToolbar alloc] initWithIdentifier:@"MCMainToolbar"];
+        toolbar.delegate = self;
+        window.toolbar = toolbar;
+
         MCToolEntry *cleaner = [[MCToolEntry alloc] init];
         cleaner.title = @"Storage Cleaner";
+        cleaner.subtitle = @"Caches, logs and developer leftovers that are safe to remove.";
         cleaner.symbolName = @"trash";
         cleaner.make = ^{ return (NSViewController *)[[MCCleanerViewController alloc] init]; };
 
         MCToolEntry *largeFiles = [[MCToolEntry alloc] init];
         largeFiles.title = @"Large Files";
+        largeFiles.subtitle = @"Find the biggest files in a folder and decide what goes.";
         largeFiles.symbolName = @"doc.text.magnifyingglass";
         largeFiles.make = ^{ return (NSViewController *)[[MCLargeFilesViewController alloc] init]; };
 
         MCToolEntry *performance = [[MCToolEntry alloc] init];
         performance.title = @"Performance";
+        performance.subtitle = @"See what uses your CPU and memory, and reclaim it.";
         performance.symbolName = @"gauge.with.needle";
         performance.make = ^{ return (NSViewController *)[[MCPerformanceViewController alloc] init]; };
 
         MCToolEntry *photoCleaner = [[MCToolEntry alloc] init];
         photoCleaner.title = @"Photo Cleaner";
+        photoCleaner.subtitle = @"Find duplicate, similar and blurry photos.";
         photoCleaner.symbolName = @"photo.on.rectangle.angled";
         photoCleaner.make = ^{ return (NSViewController *)[[MCPhotosViewController alloc] init]; };
 
@@ -160,7 +181,7 @@
 
         NSSplitViewController *split = [[NSSplitViewController alloc] init];
         NSSplitViewItem *side = [NSSplitViewItem sidebarWithViewController:_sidebar];
-        side.minimumThickness = 150;
+        side.minimumThickness = 190;
         side.maximumThickness = 240;
         // The sidebar is the tool switcher; collapsing it would strand the
         // user in whatever tool happened to be open.
@@ -196,6 +217,22 @@
     [NSApp terminate:nil];
 }
 
+#pragma mark NSToolbarDelegate
+
+- (NSArray<NSToolbarItemIdentifier> *)toolbarDefaultItemIdentifiers:(NSToolbar *)toolbar {
+    return @[ NSToolbarSidebarTrackingSeparatorItemIdentifier ];
+}
+
+- (NSArray<NSToolbarItemIdentifier> *)toolbarAllowedItemIdentifiers:(NSToolbar *)toolbar {
+    return [self toolbarDefaultItemIdentifiers:toolbar];
+}
+
+- (nullable NSToolbarItem *)toolbar:(NSToolbar *)toolbar
+              itemForItemIdentifier:(NSToolbarItemIdentifier)itemIdentifier
+          willBeInsertedIntoToolbar:(BOOL)flag {
+    return nil; // only system items, which AppKit supplies itself
+}
+
 #pragma mark MCToolSidebarDelegate
 
 - (void)sidebarDidSelectToolAtIndex:(NSInteger)index {
@@ -221,17 +258,20 @@
 
     self.currentTool = tool.controller;
     [self.contentHost addChildViewController:tool.controller];
+    NSView *host = self.contentHost.view;
     NSView *toolView = tool.controller.view;
     toolView.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.contentHost.view addSubview:toolView];
+    [host addSubview:toolView];
     [NSLayoutConstraint activateConstraints:@[
-        [toolView.topAnchor constraintEqualToAnchor:self.contentHost.view.topAnchor],
+        // The safe area starts below the full-size content's toolbar.
+        [toolView.topAnchor constraintEqualToAnchor:host.safeAreaLayoutGuide.topAnchor],
         [toolView.bottomAnchor constraintEqualToAnchor:self.contentHost.view.bottomAnchor],
         [toolView.leadingAnchor constraintEqualToAnchor:self.contentHost.view.leadingAnchor],
         [toolView.trailingAnchor constraintEqualToAnchor:self.contentHost.view.trailingAnchor],
     ]];
 
-    self.window.title = [NSString stringWithFormat:@"MacCleaner — %@", tool.title];
+    self.window.title = tool.title;
+    self.window.subtitle = tool.subtitle;
 }
 
 @end

@@ -46,6 +46,7 @@ set(MACCLEANER_CORE_SOURCES
     src/processes.cpp
     src/cli.cpp
     src/walk.cpp
+    src/photos.cpp
 )
 
 set(MACCLEANER_APPLE_SOURCES)

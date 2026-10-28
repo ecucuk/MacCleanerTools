@@ -5,6 +5,7 @@
 
 #include "maccleaner/bigfiles.hpp"
 #include "maccleaner/cleaner.hpp"
+#include "maccleaner/photos.hpp"
 #include "maccleaner/processes.hpp"
 #include "maccleaner/cli.hpp"
 #include "maccleaner/format.hpp"
@@ -790,6 +791,116 @@ void testWalkFilesSkipsFilteredDirs() {
                        [](const fs::path& p) { return p.filename() == "b.jpg"; }));
 }
 
+// --- photos -------------------------------------------------------------
+
+namespace photos = maccleaner::photos;
+
+photos::GrayImage makeImage(int width, int height, int (*pixel)(int x, int y)) {
+    photos::GrayImage image{width, height, std::vector<std::uint8_t>(static_cast<std::size_t>(width * height))};
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            image.pixels[static_cast<std::size_t>(y * width + x)] =
+                static_cast<std::uint8_t>(std::clamp(pixel(x, y), 0, 255));
+        }
+    }
+    return image;
+}
+
+// Ramp with a 28 px square wave on top: wider than one 9x8 cell, so the
+// cells are not monotone and dHash gets both 0 and 1 bits.
+int rampPixel(int x, int y) { return x * 2 + ((x / 14) % 2) * 80 + y; }
+int rampMirroredPixel(int x, int y) { return rampPixel(63 - x, y); }
+int rampBrighterPixel(int x, int y) { return rampPixel(x, y) + 20; }
+int checkerPixel(int x, int y) { return ((x / 4 + y / 4) % 2) ? 255 : 0; }
+
+photos::GrayImage boxBlur(const photos::GrayImage& in) {
+    photos::GrayImage out = in;
+    for (int y = 1; y + 1 < in.height; ++y) {
+        for (int x = 1; x + 1 < in.width; ++x) {
+            int sum = 0;
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dx = -1; dx <= 1; ++dx) {
+                    sum += in.pixels[static_cast<std::size_t>((y + dy) * in.width + x + dx)];
+                }
+            }
+            out.pixels[static_cast<std::size_t>(y * in.width + x)] = static_cast<std::uint8_t>(sum / 9);
+        }
+    }
+    return out;
+}
+
+void testDHashIdentical() {
+    const auto image = makeImage(64, 64, rampPixel);
+    CHECK_EQ(photos::hammingDistance(photos::dHash(image), photos::dHash(image)), 0);
+    CHECK(photos::dHash(image) != 0);
+}
+
+void testDHashBrightnessShift() {
+    const auto a = photos::dHash(makeImage(64, 64, rampPixel));
+    const auto b = photos::dHash(makeImage(64, 64, rampBrighterPixel));
+    CHECK(photos::hammingDistance(a, b) <= 2);
+}
+
+void testDHashMirrored() {
+    const auto a = photos::dHash(makeImage(64, 64, rampPixel));
+    const auto b = photos::dHash(makeImage(64, 64, rampMirroredPixel));
+    CHECK(photos::hammingDistance(a, b) >= 32);
+}
+
+void testPhotoMetricsOnTinyImages() {
+    CHECK_EQ(photos::dHash(makeImage(4, 4, rampPixel)), 0u);
+    CHECK_EQ(photos::sharpness(makeImage(2, 2, checkerPixel)), 0.0);
+    CHECK_EQ(photos::dHash(photos::GrayImage{}), 0u);
+}
+
+void testSharpnessBlurLower() {
+    const auto sharp = makeImage(64, 64, checkerPixel);
+    CHECK(photos::sharpness(sharp) > 4 * photos::sharpness(boxBlur(sharp)));
+}
+
+photos::PhotoInfo info(std::string id, std::uint64_t hash, int side, double sharpness, std::int64_t created) {
+    photos::PhotoInfo p;
+    p.id = std::move(id);
+    p.hash = hash;
+    p.pixelWidth = side;
+    p.pixelHeight = side;
+    p.sharpness = sharpness;
+    p.createdUnix = created;
+    return p;
+}
+
+void testGroupKeeperOrder() {
+    const std::vector<photos::PhotoInfo> infos = {
+        info("small", 7, 100, 50, 1000),
+        info("big-blurry", 7, 200, 5, 1000),
+        info("big-sharp", 7, 200, 9, 3000),
+        info("big-sharp-older", 7, 200, 9, 2000),
+    };
+    const auto groups = photos::groupDuplicates(infos);
+    CHECK_EQ(groups.size(), 1u);
+    if (groups.size() == 1) {
+        CHECK_EQ(groups[0].size(), 4u);
+        CHECK_EQ(infos[groups[0][0]].id, std::string("big-sharp-older"));
+    }
+}
+
+void testGroupTransitive() {
+    const std::vector<photos::PhotoInfo> infos = {
+        info("a", 0x0, 10, 1, 0), info("b", 0xF, 10, 1, 0), info("c", 0xFF, 10, 1, 0),
+        info("far", ~0ull, 10, 1, 0),
+    };
+    const auto groups = photos::groupDuplicates(infos);
+    CHECK_EQ(groups.size(), 1u);
+    if (!groups.empty()) {
+        CHECK_EQ(groups[0].size(), 3u);
+    }
+}
+
+void testGroupNoPairs() {
+    CHECK(photos::groupDuplicates({}).empty());
+    CHECK(photos::groupDuplicates({info("only", 1, 10, 1, 0)}).empty());
+}
+
 int main() {
     testHumanReadableBytes();
 
@@ -822,6 +933,15 @@ int main() {
     testBigFilesStreamsResults();
     testBigFilesCancellation();
     testWalkFilesSkipsFilteredDirs();
+
+    testDHashIdentical();
+    testDHashBrightnessShift();
+    testDHashMirrored();
+    testPhotoMetricsOnTinyImages();
+    testSharpnessBlurLower();
+    testGroupKeeperOrder();
+    testGroupTransitive();
+    testGroupNoPairs();
 
     testClassifyProcess();
     testDiffProcessSamplesComputesCpuPercent();

@@ -5,6 +5,7 @@
 
 #include "maccleaner/bigfiles.hpp"
 #include "maccleaner/cleaner.hpp"
+#include "maccleaner/optimizer.hpp"
 #include "maccleaner/processes.hpp"
 #include "maccleaner/cli.hpp"
 #include "maccleaner/format.hpp"
@@ -16,6 +17,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <signal.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -704,6 +706,345 @@ void testKillProcessTerminatesOwnChild() {
     CHECK_EQ(WTERMSIG(status), SIGTERM);
 }
 
+// --- optimizer ----------------------------------------------------------
+
+using maccleaner::appBundleDepth;
+using maccleaner::findOptimizationCandidates;
+using maccleaner::isRelaunchableAgent;
+using maccleaner::isUserFacingApp;
+using maccleaner::JunkKind;
+using maccleaner::OptimizationCandidate;
+using maccleaner::owningAppBundle;
+using maccleaner::ProcessState;
+
+// A live pid we own, so candidates survive the isSafeToKill() gate that
+// findOptimizationCandidates applies last. Reused across the rule tests;
+// reaped at the end of the run.
+class LiveHelper {
+public:
+    LiveHelper() {
+        pid_ = ::fork();
+        if (pid_ == 0) {
+            ::execlp("sleep", "sleep", "30", static_cast<char*>(nullptr));
+            _exit(127);
+        }
+    }
+    ~LiveHelper() {
+        if (pid_ > 0) {
+            ::kill(pid_, SIGKILL);
+            int status = 0;
+            ::waitpid(pid_, &status, 0);
+        }
+    }
+    pid_t pid() const { return pid_; }
+
+private:
+    pid_t pid_ = -1;
+};
+
+maccleaner::ProcessSample makeSample(pid_t pid, const std::string& name, const std::string& path) {
+    maccleaner::ProcessSample sample;
+    sample.pid = pid;
+    sample.name = name;
+    sample.path = path;
+    sample.memoryBytes = 100 << 20;
+    sample.state = ProcessState::Running;
+    // Recent by default, so the idle-helper rule (which needs a minimum
+    // uptime) does not fire on samples written for the other rules.
+    sample.startTime = std::time(nullptr);
+    return sample;
+}
+
+// Most optimizer tests describe processes whose paths are synthetic, so the
+// default world says every executable is still installed; the
+// deleted-executable test overrides it. Without this every made-up path
+// would look like a program that had been uninstalled.
+const maccleaner::PathExistsFn kEverythingInstalled = [](const std::string&) { return true; };
+
+// The optimizer works on diffed samples; most rules ignore cpuPercent, so
+// tests state it only when the idle rule is what is under test.
+maccleaner::ProcessInfo makeInfo(const maccleaner::ProcessSample& sample, double cpuPercent = 50.0) {
+    maccleaner::ProcessInfo info;
+    info.sample = sample;
+    info.cpuPercent = cpuPercent;
+    return info;
+}
+
+void testAppBundleDepthAndClassification() {
+    CHECK_EQ(appBundleDepth("/Applications/Foo.app/Contents/MacOS/Foo"), 1);
+    CHECK_EQ(appBundleDepth("/Applications/Foo.app/Contents/Frameworks/Foo Helper.app/Contents/MacOS/Foo Helper"), 2);
+    CHECK_EQ(appBundleDepth("/usr/libexec/secd"), 0);
+    // ".app" must be a whole path component: a directory named "notanapp"
+    // or a file "data.appdata" must not register as a bundle, or a real
+    // application could be misread as a nested helper and get killed.
+    CHECK_EQ(appBundleDepth("/Users/x/notanapp/bin/tool"), 0);
+    CHECK_EQ(appBundleDepth("/Users/x/data.appdata/thing"), 0);
+
+    CHECK(isUserFacingApp("/Applications/Foo.app/Contents/MacOS/Foo"));
+    CHECK(!isUserFacingApp("/Applications/Foo.app/Contents/Frameworks/Foo Helper.app/Contents/MacOS/Foo Helper"));
+    CHECK(!isUserFacingApp("/usr/libexec/secd"));
+
+    CHECK(owningAppBundle("/Applications/Foo.app/Contents/Frameworks/Foo Helper.app/Contents/MacOS/Foo Helper") ==
+          "/Applications/Foo.app");
+    CHECK(owningAppBundle("/Applications/Foo.app/Contents/MacOS/Foo").empty());
+
+    CHECK(isRelaunchableAgent("GoogleSoftwareUpdateAgent"));
+    CHECK(!isRelaunchableAgent("Google Chrome"));
+}
+
+void testOptimizerNeverTargetsUserFacingApps() {
+    LiveHelper helper;
+    // A running app, plus a zombie *app* (contrived) -- neither may be
+    // proposed. This is the rule that keeps unsaved documents safe.
+    auto app = makeSample(helper.pid(), "Foo", "/Applications/Foo.app/Contents/MacOS/Foo");
+    auto zombieApp = makeSample(helper.pid(), "Bar", "/Applications/Bar.app/Contents/MacOS/Bar");
+    zombieApp.state = ProcessState::Zombie;
+
+    const auto candidates = findOptimizationCandidates({makeInfo(app), makeInfo(zombieApp)}, {}, kEverythingInstalled);
+    CHECK(candidates.empty());
+}
+
+void testOptimizerFindsOrphanedHelperButNotAdoptedOne() {
+    LiveHelper live;
+
+    const std::string liveAppPath = "/Applications/Live.app/Contents/MacOS/Live";
+    const std::string liveHelperPath =
+        "/Applications/Live.app/Contents/Frameworks/Live Helper (Renderer).app/Contents/MacOS/Live Helper (Renderer)";
+    const std::string deadHelperPath =
+        "/Applications/Dead.app/Contents/Frameworks/Dead Helper (Renderer).app/Contents/MacOS/Dead Helper (Renderer)";
+
+    const std::vector<maccleaner::ProcessInfo> samples{
+        makeInfo(makeSample(live.pid(), "Live", liveAppPath)),                     // app running
+        makeInfo(makeSample(live.pid(), "Live Helper (Renderer)", liveHelperPath)), // its helper: keep
+        makeInfo(makeSample(live.pid(), "Dead Helper (Renderer)", deadHelperPath)), // owner gone: reclaim
+    };
+
+    const auto candidates = findOptimizationCandidates(samples, {}, kEverythingInstalled);
+    CHECK_EQ(candidates.size(), 1u);
+    if (!candidates.empty()) {
+        CHECK(candidates[0].sample.path == deadHelperPath);
+        CHECK(candidates[0].kind == JunkKind::OrphanedHelper);
+        CHECK(candidates[0].reason.find("Dead.app") != std::string::npos);
+    }
+}
+
+// Regression: an earlier version of the orphan rule matched any nested
+// helper whose owning app was not running, and proposed killing persistent
+// background agents on a real machine -- a login item that provides the
+// user's mouse remapping, and an app launcher registered with launchd.
+// Both are reparented to launchd and have no running parent app by design.
+void testOptimizerSparesPersistentBackgroundAgents() {
+    LiveHelper live;
+
+    // Role-less helper living in a LoginItems bundle: the real "Mac Mouse
+    // Fix Helper" shape. Two independent reasons to spare it.
+    const std::string loginItem =
+        "/Applications/Mouse.app/Contents/Library/LoginItems/Mouse Helper.app/Contents/MacOS/Mouse Helper";
+    // Role-less launcher in a Helpers directory: the "GeminiAppLauncher"
+    // shape -- nested, owner not running, but deliberately persistent.
+    const std::string launcher =
+        "/Applications/Thing.app/Contents/Helpers/ThingLauncher.app/Contents/MacOS/ThingLauncher";
+
+    const std::vector<maccleaner::ProcessInfo> samples{
+        makeInfo(makeSample(live.pid(), "Mouse Helper", loginItem)),
+        makeInfo(makeSample(live.pid(), "ThingLauncher", launcher)),
+    };
+
+    CHECK(findOptimizationCandidates(samples, {}, kEverythingInstalled).empty());
+}
+
+void testOptimizerFindsZombiesStoppedAndAgents() {
+    LiveHelper live;
+
+    auto zombie = makeSample(live.pid(), "leftover", "/opt/tool/leftover");
+    zombie.state = ProcessState::Zombie;
+    auto stopped = makeSample(live.pid(), "paused", "/opt/tool/paused");
+    stopped.state = ProcessState::Stopped;
+    auto agent = makeSample(live.pid(), "GoogleSoftwareUpdateAgent", "/Users/x/Library/Google/GoogleUpdater");
+    auto ordinary = makeSample(live.pid(), "node", "/opt/homebrew/bin/node");
+
+    const auto candidates = findOptimizationCandidates(
+        {makeInfo(zombie), makeInfo(stopped), makeInfo(agent), makeInfo(ordinary)}, {}, kEverythingInstalled);
+    CHECK_EQ(candidates.size(), 3u); // ordinary background work is left alone
+
+    bool sawZombie = false, sawStopped = false, sawAgent = false, sawOrdinary = false;
+    for (const OptimizationCandidate& candidate : candidates) {
+        sawZombie |= candidate.sample.name == "leftover";
+        sawStopped |= candidate.sample.name == "paused";
+        sawAgent |= candidate.sample.name == "GoogleSoftwareUpdateAgent";
+        sawOrdinary |= candidate.sample.name == "node";
+    }
+    CHECK(sawZombie);
+    CHECK(sawStopped);
+    CHECK(sawAgent);
+    CHECK(!sawOrdinary);
+}
+
+void testOptimizerSortsByReclaimableMemory() {
+    LiveHelper live;
+    auto small = makeSample(live.pid(), "small", "/opt/a");
+    small.state = ProcessState::Zombie;
+    small.memoryBytes = 10 << 20;
+    auto big = makeSample(live.pid(), "big", "/opt/b");
+    big.state = ProcessState::Zombie;
+    big.memoryBytes = 900 << 20;
+
+    const auto candidates = findOptimizationCandidates({makeInfo(small), makeInfo(big)}, {}, kEverythingInstalled);
+    CHECK_EQ(candidates.size(), 2u);
+    if (candidates.size() == 2) {
+        CHECK(candidates[0].sample.name == "big");
+    }
+}
+
+void testOptimizerFindsDeletedExecutables() {
+    LiveHelper live;
+    // A path that does not exist: the app was deleted or replaced by an
+    // update while this process kept running.
+    auto ghostBinary = makeSample(live.pid(), "leftover", "/opt/definitely/not/installed/leftover");
+    // A path that does exist must not match this rule.
+    auto realBinary = makeSample(live.pid(), "sleep", "/bin/sleep");
+
+    // This test is the one that cares about the filesystem, so it says
+    // exactly which path is missing rather than relying on the real disk.
+    const maccleaner::PathExistsFn world = [&](const std::string& path) {
+        return path != "/opt/definitely/not/installed/leftover";
+    };
+    const auto candidates =
+        findOptimizationCandidates({makeInfo(ghostBinary), makeInfo(realBinary)}, {}, world);
+    CHECK_EQ(candidates.size(), 1u);
+    if (!candidates.empty()) {
+        CHECK(candidates[0].kind == JunkKind::DeletedExecutable);
+        CHECK(candidates[0].recommended);
+    }
+}
+
+void testUpdaterNamePattern() {
+    // Generic pattern, so vendors the explicit list never enumerates still
+    // get caught.
+    CHECK(isRelaunchableAgent("SomeVendorUpdater"));
+    CHECK(isRelaunchableAgent("AcmeAutoUpdate"));
+    CHECK(isRelaunchableAgent("VendorUpdateService"));
+    CHECK(isRelaunchableAgent("GoogleSoftwareUpdateAgent")); // explicit list still works
+
+    // Must not swallow processes that merely contain the letters.
+    CHECK(!isRelaunchableAgent("Updaterface"));
+    CHECK(!isRelaunchableAgent("Google Chrome"));
+    CHECK(!isRelaunchableAgent("node"));
+}
+
+// Regression: the generic updater pattern matched SetStoreUpdateService, an
+// Apple XPC service under /System/Library/PrivateFrameworks, and proposed
+// closing five copies of it. Apple's own on-demand services are not
+// third-party update checkers, whatever they are called.
+void testOptimizerSparesAppleSystemServices() {
+    LiveHelper live;
+    const auto appleService = makeSample(
+        live.pid(), "SetStoreUpdateService",
+        "/System/Library/PrivateFrameworks/CascadeSets.framework/Versions/A/XPCServices/"
+        "SetStoreUpdateService.xpc/Contents/MacOS/SetStoreUpdateService");
+    CHECK(findOptimizationCandidates({makeInfo(appleService)}, {}, kEverythingInstalled).empty());
+
+    // The same name outside /System, as a normal third-party binary, still
+    // qualifies -- the exclusion is about who ships it, not the word.
+    const auto vendorUpdater =
+        makeSample(live.pid(), "VendorUpdateService", "/Applications/Vendor.app/Helpers/VendorUpdateService");
+    const auto candidates =
+        findOptimizationCandidates({makeInfo(vendorUpdater)}, {}, kEverythingInstalled);
+    CHECK_EQ(candidates.size(), 1u);
+    if (!candidates.empty()) {
+        CHECK(candidates[0].kind == JunkKind::RelaunchableAgent);
+    }
+}
+
+void testOptimizerIdleHelperRuleIsOptInAndBounded() {
+    LiveHelper live;
+    const std::string appPath = "/Applications/Editor.app/Contents/MacOS/Editor";
+    const std::string helperPath = "/Applications/Editor.app/Contents/Frameworks/"
+                                    "Editor Helper (Renderer).app/Contents/MacOS/Editor Helper (Renderer)";
+
+    auto app = makeSample(live.pid(), "Editor", appPath);
+    auto idleHelper = makeSample(live.pid(), "Editor Helper (Renderer)", helperPath);
+    idleHelper.memoryBytes = 600ull << 20;
+    idleHelper.startTime = std::time(nullptr) - 3600; // an hour old
+
+    // Idle: proposed, but never pre-accepted -- it is alive, and its content
+    // would have to reload.
+    const auto candidates = findOptimizationCandidates({makeInfo(app), makeInfo(idleHelper, 0.1)}, {}, kEverythingInstalled);
+    CHECK_EQ(candidates.size(), 1u);
+    if (!candidates.empty()) {
+        CHECK(candidates[0].kind == JunkKind::IdleHeavyHelper);
+        CHECK(!candidates[0].recommended);
+    }
+
+    // Busy: not idle at all, so not proposed.
+    CHECK(findOptimizationCandidates({makeInfo(app), makeInfo(idleHelper, 40.0)}, {}, kEverythingInstalled).empty());
+
+    // Idle but small: not worth reclaiming.
+    auto smallHelper = idleHelper;
+    smallHelper.memoryBytes = 20ull << 20;
+    CHECK(findOptimizationCandidates({makeInfo(app), makeInfo(smallHelper, 0.1)}, {}, kEverythingInstalled).empty());
+
+    // Idle and large but only just started: too young to call idle.
+    auto youngHelper = idleHelper;
+    youngHelper.startTime = std::time(nullptr);
+    CHECK(findOptimizationCandidates({makeInfo(app), makeInfo(youngHelper, 0.1)}, {}, kEverythingInstalled).empty());
+
+    // And the rule must never reach a user-facing app, however idle and fat.
+    auto idleApp = makeSample(live.pid(), "Editor", appPath);
+    idleApp.memoryBytes = 4ull << 30;
+    idleApp.startTime = std::time(nullptr) - 86400;
+    CHECK(findOptimizationCandidates({makeInfo(idleApp, 0.0)}, {}, kEverythingInstalled).empty());
+}
+
+void testOptimizerSortsRecommendedFirst() {
+    LiveHelper live;
+    const std::string appPath = "/Applications/Editor.app/Contents/MacOS/Editor";
+    const std::string helperPath = "/Applications/Editor.app/Contents/Frameworks/"
+                                    "Editor Helper (Renderer).app/Contents/MacOS/Editor Helper (Renderer)";
+
+    auto app = makeSample(live.pid(), "Editor", appPath);
+    auto bigIdle = makeSample(live.pid(), "Editor Helper (Renderer)", helperPath);
+    bigIdle.memoryBytes = 900ull << 20;
+    bigIdle.startTime = std::time(nullptr) - 3600;
+
+    auto smallZombie = makeSample(live.pid(), "tiny", "/opt/tiny");
+    smallZombie.state = ProcessState::Zombie;
+    smallZombie.memoryBytes = 1 << 20;
+
+    const auto candidates =
+        findOptimizationCandidates({makeInfo(app), makeInfo(bigIdle, 0.1), makeInfo(smallZombie)}, {},
+                                    kEverythingInstalled);
+    CHECK_EQ(candidates.size(), 2u);
+    if (candidates.size() == 2) {
+        // The small recommended one outranks the large opt-in one: the rows
+        // the user is most likely to accept must not be buried.
+        CHECK(candidates[0].recommended);
+        CHECK(!candidates[1].recommended);
+    }
+}
+
+void testOptimizerRespectsSafeKillGuard() {
+    // Our own pid passes every rule below but must still be filtered out by
+    // the isSafeToKill() gate the rules apply last.
+    auto self = makeSample(::getpid(), "self", "/opt/self");
+    self.state = ProcessState::Zombie;
+    CHECK(findOptimizationCandidates({makeInfo(self)}, {}, kEverythingInstalled).empty());
+
+    // A pid that does not exist cannot be killed either.
+    auto ghost = makeSample(999999, "ghost", "/opt/ghost");
+    ghost.state = ProcessState::Zombie;
+    CHECK(findOptimizationCandidates({makeInfo(ghost)}, {}, kEverythingInstalled).empty());
+}
+
+void testCliParsesOptimize() {
+    CliParseError error;
+    const char* argv[] = {"mac_cleaner", "optimize", "--apply"};
+    const auto options = parseArgs(3, const_cast<char**>(argv), error);
+    CHECK(options.has_value());
+    CHECK(options->command == Command::Optimize);
+    CHECK(options->apply);
+}
+
 void testCliDefaultsToScan() {
     CliParseError error;
     const auto options = parse({"mac_cleaner"}, error);
@@ -814,6 +1155,19 @@ int main() {
     testIsSafeToKillRejectsProtectedTargets();
     testIsSafeToKillReportsForeignProcessesAccurately();
     testKillProcessTerminatesOwnChild();
+
+    testAppBundleDepthAndClassification();
+    testOptimizerNeverTargetsUserFacingApps();
+    testOptimizerFindsOrphanedHelperButNotAdoptedOne();
+    testOptimizerSparesPersistentBackgroundAgents();
+    testOptimizerFindsZombiesStoppedAndAgents();
+    testOptimizerSortsByReclaimableMemory();
+    testOptimizerFindsDeletedExecutables();
+    testUpdaterNamePattern();
+    testOptimizerSparesAppleSystemServices();
+    testOptimizerIdleHelperRuleIsOptInAndBounded();
+    testOptimizerSortsRecommendedFirst();
+    testOptimizerRespectsSafeKillGuard();
     testParseSizeSpec();
 
     testCliDefaultsToScan();
@@ -824,6 +1178,7 @@ int main() {
     testCliRejectsPermanentWithoutApply();
     testCliHelpShortCircuits();
     testCliParsesBigFiles();
+    testCliParsesOptimize();
 
     if (g_failures == 0) {
         std::cout << "All tests passed.\n";

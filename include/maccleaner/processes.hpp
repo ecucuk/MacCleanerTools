@@ -12,14 +12,25 @@ namespace maccleaner {
 // One point-in-time measurement of one process. CPU time is cumulative
 // (user + system, nanoseconds since process start); turning it into a
 // percentage requires two samples -- see diffProcessSamples.
+// Kernel-reported run state, as far as the optimizer cares. Anything that is
+// not explicitly zombie or stopped counts as Running -- the distinction that
+// matters is "doing nothing and never will again" versus "alive".
+enum class ProcessState {
+    Running,
+    Stopped, // SSTOP: suspended, e.g. by SIGSTOP or a stuck debugger
+    Zombie,  // SZOMB: exited, waiting for a parent that may never reap it
+};
+
 struct ProcessSample {
     pid_t pid = 0;
+    pid_t parentPid = 0;
     uid_t uid = 0;
     std::string name;             // best-effort: proc_name, else path basename
     std::string path;             // may be empty when unavailable
     std::uint64_t cpuTimeNs = 0;  // cumulative user+system CPU time
     std::uint64_t memoryBytes = 0; // phys_footprint: what Activity Monitor calls "Memory"
     std::time_t startTime = 0;     // epoch seconds
+    ProcessState state = ProcessState::Running;
 };
 
 // Where a process lives, for display/filtering. Classification is purely

@@ -19,6 +19,13 @@ namespace maccleaner {
 namespace {
 
 #ifdef __APPLE__
+// proc_bsdinfo::pbi_status values. They live in <sys/proc.h>, a kernel
+// header that drags in a great deal of unrelated declarations when pulled
+// into userland, so the two we actually test for are spelled out here --
+// they are stable ABI constants.
+constexpr std::uint32_t kStatusStopped = 4; // SSTOP
+constexpr std::uint32_t kStatusZombie = 5;  // SZOMB
+
 // rusage_info CPU times are in mach time units, which are 1:1 with
 // nanoseconds on Intel but not on Apple Silicon (125/3). Convert once.
 std::uint64_t machToNs(std::uint64_t mach) {
@@ -89,8 +96,12 @@ std::vector<ProcessSample> sampleProcesses(uid_t uid) {
 
         ProcessSample sample;
         sample.pid = pid;
+        sample.parentPid = static_cast<pid_t>(bsd.pbi_ppid);
         sample.uid = bsd.pbi_uid;
         sample.startTime = static_cast<std::time_t>(bsd.pbi_start_tvsec);
+        sample.state = bsd.pbi_status == kStatusZombie    ? ProcessState::Zombie
+                        : bsd.pbi_status == kStatusStopped ? ProcessState::Stopped
+                                                            : ProcessState::Running;
         sample.cpuTimeNs = machToNs(usage.ri_user_time + usage.ri_system_time);
         sample.memoryBytes = usage.ri_phys_footprint;
 

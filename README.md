@@ -9,7 +9,8 @@ behind one sidebar:
 - **Large Files** — walk any directory (default: your home) and list the
   largest files, with Reveal-in-Finder and Move-to-Trash actions.
 - **Performance** — a live view of your processes by CPU, memory and
-  uptime, with heavy consumers flagged and guarded Quit / Force Quit.
+  uptime, with heavy consumers flagged, guarded Quit / Force Quit, and a
+  one-click **Optimize** that finds processes worth reclaiming.
 
 Ships as two front ends over one core library (`maccleaner_core`) — a
 `mac_cleaner` CLI and a `MacCleaner.app` AppKit GUI. Scanning, the safety
@@ -73,6 +74,8 @@ build/mac_cleaner bigfiles                       # 100 largest files >= 100 MB u
 build/mac_cleaner bigfiles --under=~/Movies --min=1G --top=20
 build/mac_cleaner processes                      # your 20 hungriest processes (1s sample)
 build/mac_cleaner processes --sort=mem --top=10
+build/mac_cleaner optimize                       # report reclaimable processes
+build/mac_cleaner optimize --apply               # and terminate them (SIGTERM)
 ```
 
 ## Usage — GUI
@@ -109,6 +112,67 @@ so the first refresh reads 0 — there is no baseline yet. The *Heavy /
 Long-Running* filter selects processes over 50 % CPU, over 1 GB of memory,
 or running for more than a day while still burning 10 %+ CPU. Sampling
 stops while the tool is off-screen, and **Pause** freezes it for reading.
+
+### Optimize
+
+**Optimize…** answers one question — *what is running that nobody needs?* —
+and it answers it narrowly, because the failure mode of a process optimizer
+is closing something that was doing its job. A process is proposed only when
+it is:
+
+1. **Finished or suspended** — a zombie waiting for a parent that will never
+   reap it, or a stopped process. Doing nothing, and never will again.
+2. **An orphaned renderer** — a Chromium/Electron *role* helper
+   (`Foo Helper (Renderer)`, `(GPU)`, `(Plugin)`) whose owning `.app` is no
+   longer running. Its app quit and leaked it; it can no longer serve anyone.
+3. **A program that is no longer installed** — its executable is gone from
+   disk, deleted or replaced by an update while the process kept running.
+4. **An idle update checker** — an explicit list of known agents (Google
+   Keystone, Microsoft AutoUpdate, Adobe CC satellites) plus a generic
+   `*Updater` / `*AutoUpdate` / `*UpdateService` name pattern, for the
+   vendors a list will never enumerate.
+5. **An idle helper of a running app** — a Chromium/Electron or WebKit
+   helper over 250 MB that has used essentially no CPU and has been up for
+   at least 15 minutes. This one is **opt-in**: it arrives unchecked,
+   because unlike 1–4 it is alive and reclaiming it costs a reload of
+   whatever it was holding.
+
+And never when it is a **user-facing application** (anything with a Dock
+icon, which may be holding unsaved work), a **login item or launchd agent**,
+**Apple's own system services or XPC services** (the system starts and stops
+those on demand), this app itself, or anything the
+[safe-kill guard](#which-processes-can-be-killed) rejects. Termination is
+**SIGTERM only** — the optimizer never escalates to SIGKILL on its own.
+
+Two of these exclusions exist because the rules misfired on a real machine
+before them: rule 4's generic pattern matched `SetStoreUpdateService`, an
+Apple XPC service under `/System/Library/PrivateFrameworks`, and proposed
+closing five copies of it. "UpdateService" inside an Apple framework does
+not mean what `SomeVendorUpdater` in `/Applications` means.
+
+Rule 2 is restricted to *role* helpers for a reason found the hard way: an
+earlier version matched any nested helper whose owning app was not running,
+and on a real machine proposed killing `Mac Mouse Fix Helper` — a login item
+that *is* the product, whose "app" is only its settings window. A role-less
+`Foo Helper` is usually a persistent agent; the parenthesised role is what
+marks a genuine per-session child.
+
+Deliberately **not** a rule: "idle process holding a lot of memory". Unused
+memory is not a problem to solve — macOS reclaims it under pressure — and
+that criterion is precisely how cleaner apps end up closing the editor with
+someone's unsaved file in it.
+
+Nothing is signalled until you review it. Clicking Optimize opens a sheet
+listing every proposal with its reason and footprint — rules 1–4 checked,
+rule 5 unchecked — and you decide row by row (or use Select All). When
+there is nothing to reclaim it says so in the status line rather than
+interrupting with a dialog.
+
+CPU is sampled over one second, so a helper that happens to twitch during
+that window reads as busy and is skipped; run Optimize again if you expect
+something that did not appear. `mac_cleaner optimize --apply` acts on the
+recommended rows only — the opt-in ones cost a reload, and a non-interactive
+flag is no place to make that choice for someone.
 
 ### Which processes can be killed
 
@@ -256,6 +320,7 @@ src/platform/         OS-specific Trash backend (trash_mac.mm / trash_fallback.c
 src/gui/              AppKit front end: MCMainWindowController = sidebar shell,
                       MCCleanerViewController / MCLargeFilesViewController /
                       MCPerformanceViewController = tools,
+                      MCOptimizeSheetController = the Optimize review sheet,
                       MCScanModel / MCBigFilesModel / MCProcessModel =
                       core wrappers + threading,
                       main.mm = NSApplication

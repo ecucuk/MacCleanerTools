@@ -44,6 +44,7 @@ set(MACCLEANER_CORE_SOURCES
     src/cleaner.cpp
     src/bigfiles.cpp
     src/processes.cpp
+    src/optimizer.cpp
     src/cli.cpp
     src/walk.cpp
     src/photos.cpp
@@ -140,6 +141,10 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
         COMMENT "Staging MacCleanerViz-Swift.h")
     set_source_files_properties("${MACCLEANER_VIZ_HEADER_STAGED}" PROPERTIES GENERATED TRUE)
 
+    # Generated from tools/make_icon.m by tools/build_icon.sh and committed,
+    # so building the app never needs to run the generator.
+    set(MACCLEANER_ICON "${CMAKE_CURRENT_SOURCE_DIR}/resources/MacCleaner.icns")
+
     add_executable(MacCleaner MACOSX_BUNDLE
         src/gui/main.mm
         src/gui/MCScanModel.mm
@@ -151,9 +156,16 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
         src/gui/MCLargeFilesViewController.mm
         src/gui/MCPerformanceViewController.mm
         src/gui/MCPhotosViewController.mm
+        src/gui/MCOptimizeSheetController.mm
         src/gui/MCUsageSummaryView.mm
         "${MACCLEANER_VIZ_HEADER_STAGED}"
+        "${MACCLEANER_ICON}"
     )
+    # Listing the .icns as a source with a Resources package location is how
+    # CMake copies it into MacCleaner.app/Contents/Resources; the plist key
+    # below tells Finder and the Dock to use it.
+    set_source_files_properties("${MACCLEANER_ICON}" PROPERTIES
+        MACOSX_PACKAGE_LOCATION Resources)
     target_link_libraries(MacCleaner PRIVATE maccleaner_core maccleaner_viz maccleaner_warnings)
     target_include_directories(MacCleaner PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/viz-header")
 
@@ -192,6 +204,7 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
         MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
         MACOSX_BUNDLE_COPYRIGHT "MIT"
+        MACOSX_BUNDLE_ICON_FILE "MacCleaner.icns"
     )
 endif()
 

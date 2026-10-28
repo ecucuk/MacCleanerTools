@@ -62,6 +62,7 @@ void printUsage() {
         "  mac_cleaner bigfiles [--under=<path>] [--min=<size>] [--top=<n>]\n"
         "  mac_cleaner processes [--sort=cpu|mem] [--top=<n>]\n"
         "  mac_cleaner photos [--under=<path>] [--distance=<n>] [--blur=<t>]\n"
+        "  mac_cleaner optimize [--apply]\n"
         "\n"
         "Commands:\n"
         "  scan       Report what would be cleaned and how much space it would free (default).\n"
@@ -71,6 +72,8 @@ void printUsage() {
         "  processes  List your processes by CPU or memory use (1s sampling window).\n"
         "  photos     Report duplicate and blurry photos under a directory (default: your home).\n"
         "             Report only; remove photos from the app.\n"
+        "  optimize   Find reclaimable processes (orphaned helpers, zombies, update\n"
+        "             agents). Reports only; pass --apply to terminate them.\n"
         "\n"
         "Options (scan/clean):\n"
         "  --only=<categories>  Comma-separated subset, e.g. --only=caches,derived-data\n"
@@ -104,14 +107,14 @@ std::optional<CliOptions> parseArgs(int argc, char** argv, CliParseError& error)
     std::vector<std::string_view> args(argv + (argc > 0 ? 1 : 0), argv + argc);
 
     std::size_t index = 0;
-    if (!args.empty() &&
-        (args[0] == "scan" || args[0] == "clean" || args[0] == "bigfiles" || args[0] == "processes" ||
-         args[0] == "photos")) {
+    if (!args.empty() && (args[0] == "scan" || args[0] == "clean" || args[0] == "bigfiles" ||
+                          args[0] == "processes" || args[0] == "optimize" || args[0] == "photos")) {
         options.command = (args[0] == "scan")       ? Command::Scan
                           : (args[0] == "clean")     ? Command::Clean
                           : (args[0] == "bigfiles")  ? Command::BigFiles
+                          : (args[0] == "processes") ? Command::Processes
                           : (args[0] == "photos")    ? Command::Photos
-                                                      : Command::Processes;
+                                                      : Command::Optimize;
         index = 1;
     }
 

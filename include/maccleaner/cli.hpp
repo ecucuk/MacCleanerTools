@@ -15,6 +15,7 @@ enum class Command {
     BigFiles,   // list the largest files under a root
     Processes,  // list the current user's processes by CPU/memory
     Photos,     // report duplicate and blurry photos under a root
+    Optimize,   // find (and with --apply, terminate) reclaimable processes
     Help,
 };
 

@@ -479,10 +479,9 @@ NSImageView *imageViewWithoutIntrinsicSize() {
 /// look at every photo and pick what goes, which may be nothing. Each group's
 /// best copy is only labelled.
 - (void)rebuildTree {
-    // Grouping is O(n^2); redo it only when the photos or the tolerance
-    // changed, not for blur-threshold edits.
-    // shortcut: still runs on main, ~1 s per tolerance step at ~30k photos;
-    // move to the model's work queue if libraries that big are common.
+    // Redo grouping only when the photos or the tolerance changed, not for
+    // blur-threshold edits. It stays on main: at 30k photos the core takes
+    // ~15 ms up to tolerance 11 and ~140 ms above (see groupDuplicates).
     if (self.groups == nil || self.groupedDistance != self.distanceStepper.integerValue) {
         self.groupedDistance = self.distanceStepper.integerValue;
         self.groups = [self.model groupsOfItems:self.items maxDistance:self.groupedDistance];

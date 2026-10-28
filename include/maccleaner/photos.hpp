@@ -75,6 +75,8 @@ using DecodeFn = std::function<bool(const std::filesystem::path& path, Decoded& 
 
 // Platform decoder (ImageIO on macOS, EXIF orientation applied). Returns
 // false for anything it cannot decode; the non-Apple fallback always does.
+// Thread-safe, as every DecodeFn must be: scanPhotoFolder calls it from
+// several threads at once.
 bool decodeImageFile(const std::filesystem::path& path, Decoded& out);
 
 // Case-insensitive check against the still-image formats ImageIO reads
@@ -89,10 +91,12 @@ struct FolderScan {
 using PhotoProgress = std::function<void(std::uint64_t done, const std::filesystem::path& current)>;
 
 // Walks `root` with walkFiles (EPERM-tolerant, no symlinks), never entering
-// a Photos library package, and analyses every file with a photo extension.
-// The creation date falls back to the file's birth time when the image has
-// no EXIF date. `progress` fires once per decoded file, on the calling
-// thread; `cancelled` stops the scan early with what it has so far.
+// a Photos library package, and analyses every file with a photo extension
+// on one worker thread per core. Photos come back in walk order. The
+// creation date falls back to the file's birth time when the image has no
+// EXIF date. `progress` fires once per decoded file, from the workers but
+// never two calls at once; `cancelled` stops the scan early with what it has
+// so far.
 FolderScan scanPhotoFolder(const std::filesystem::path& root,
                            const std::atomic<bool>* cancelled = nullptr,
                            const PhotoProgress& progress = {},

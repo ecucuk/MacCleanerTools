@@ -9,6 +9,7 @@
 #include "maccleaner/trash.hpp"
 
 #include <atomic>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -78,17 +79,18 @@ NSString *toNSString(const std::string &value) {
 }
 
 // Throttles work-thread progress to ~4 Hz before it touches the main queue.
+// Safe to call from several threads at once (the library scan does).
 static void (^throttled(void (^progress)(uint64_t, NSString *)))(uint64_t, NSString *) {
     if (progress == nil) {
         return nil;
     }
-    __block CFAbsoluteTime lastReport = 0;
+    auto lastReport = std::make_shared<std::atomic<CFAbsoluteTime>>(0);
     return ^(uint64_t done, NSString *current) {
         const CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
-        if (now - lastReport < 0.25) {
+        CFAbsoluteTime last = lastReport->load(std::memory_order_relaxed);
+        if (now - last < 0.25 || !lastReport->compare_exchange_strong(last, now, std::memory_order_relaxed)) {
             return;
         }
-        lastReport = now;
         dispatch_async(dispatch_get_main_queue(), ^{
             progress(done, current);
         });
@@ -164,14 +166,24 @@ static void (^throttled(void (^progress)(uint64_t, NSString *)))(uint64_t, NSStr
             options.networkAccessAllowed = NO; // never download from iCloud
             const CGSize target = CGSizeMake(photos::kDecodeMaxPixels, photos::kDecodeMaxPixels);
 
-            NSMutableArray<MCPhotoItem *> *items = [NSMutableArray array];
-            __block NSUInteger skipped = 0;
-            for (NSUInteger i = 0; i < assets.count; ++i) {
+            // Decoding dominates, so assets are analysed in parallel. The
+            // fetch result loads lazily and is not documented as
+            // thread-safe, so its assets are read up front.
+            NSArray<PHAsset *> *all = [assets objectsAtIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, assets.count)]];
+            std::vector<MCPhotoItem *> slots(all.count); // asset order, whatever the thread timing
+            std::atomic<NSUInteger> skipped{0};
+            std::atomic<NSUInteger> done{0};
+            // Blocks capture C++ objects as const copies; these point at the
+            // locals instead, which outlive the synchronous dispatch_apply.
+            MCPhotoItem *__strong *slot = slots.data();
+            std::atomic<NSUInteger> *skippedCount = &skipped;
+            std::atomic<NSUInteger> *doneCount = &done;
+            dispatch_apply(all.count, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^(size_t i) {
                 if (self->_cancelled.load(std::memory_order_relaxed)) {
-                    break;
+                    return;
                 }
                 @autoreleasepool {
-                    PHAsset *asset = assets[i];
+                    PHAsset *asset = all[i];
                     __block photos::GrayImage gray;
                     __block BOOL decoded = NO;
                     [[PHImageManager defaultManager] requestImageForAsset:asset
@@ -183,8 +195,8 @@ static void (^throttled(void (^progress)(uint64_t, NSString *)))(uint64_t, NSStr
                         decoded = cgImage != nullptr && photos::grayFromCGImage(cgImage, gray);
                     }];
                     if (!decoded) {
-                        ++skipped;
-                        continue;
+                        skippedCount->fetch_add(1, std::memory_order_relaxed);
+                        return;
                     }
 
                     photos::PhotoInfo info;
@@ -209,13 +221,20 @@ static void (^throttled(void (^progress)(uint64_t, NSString *)))(uint64_t, NSStr
                     if (name == nil) {
                         name = asset.localIdentifier;
                     }
-                    [items addObject:[[MCPhotoItem alloc] initWithInfo:info name:name libraryAsset:YES]];
+                    slot[i] = [[MCPhotoItem alloc] initWithInfo:info name:name libraryAsset:YES];
                     if (report != nil) {
-                        report(items.count, name);
+                        report(doneCount->fetch_add(1, std::memory_order_relaxed) + 1, name);
                     }
                 }
+            });
+
+            NSMutableArray<MCPhotoItem *> *items = [NSMutableArray arrayWithCapacity:all.count];
+            for (MCPhotoItem *item : slots) {
+                if (item != nil) {
+                    [items addObject:item];
+                }
             }
-            finish(items, skipped, nil);
+            finish(items, skipped.load(), nil);
         });
     }];
 }

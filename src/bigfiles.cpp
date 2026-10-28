@@ -1,4 +1,5 @@
 #include "maccleaner/bigfiles.hpp"
+#include "maccleaner/walk.hpp"
 
 #include <sys/stat.h>
 
@@ -17,10 +18,6 @@ std::vector<BigFile> findBigFiles(const BigFileScanOptions& options,
                                    const BigFileProgress& progress,
                                    const BigFileResults& onResults) {
     std::vector<BigFile> results; // kept sorted descending; worst element last
-
-    auto isCancelled = [cancelled] {
-        return cancelled != nullptr && cancelled->load(std::memory_order_relaxed);
-    };
 
     // Inserts keeping `results` sorted by size descending and capped at
     // maxResults. With the cap at typical values (<= a few hundred) the
@@ -42,68 +39,21 @@ std::vector<BigFile> findBigFiles(const BigFileScanOptions& options,
         }
     };
 
-    std::uint64_t visited = 0;
-
-    // Hand-rolled DFS stack; see the header for why recursive_directory_iterator
-    // is unsuitable (its error handling aborts the whole walk on TCC's EPERM).
-    std::vector<fs::path> pending;
-    pending.push_back(options.root);
-
-    while (!pending.empty() && !isCancelled()) {
-        const fs::path dir = std::move(pending.back());
-        pending.pop_back();
-
-        if (progress) {
-            progress(visited, dir);
-        }
-
-        std::error_code ec;
-        fs::directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec);
-        if (ec) {
-            continue; // unreadable directory (EPERM/EACCES/gone): skip, keep walking
-        }
-
-        for (; it != fs::directory_iterator(); it.increment(ec)) {
-            if (ec) {
-                break; // error mid-listing: abandon this directory only
-            }
-            if (isCancelled()) {
-                return results;
-            }
-            ++visited;
-
-            const fs::directory_entry& entry = *it;
-
-            // lstat, not entry.status(): one syscall answers "symlink?",
-            // "directory?", "regular?" and the size, without following links.
-            struct stat st {};
-            if (::lstat(entry.path().c_str(), &st) != 0) {
-                continue;
-            }
-            if (S_ISLNK(st.st_mode)) {
-                continue;
-            }
-            if (S_ISDIR(st.st_mode)) {
-                pending.push_back(entry.path());
-                continue;
-            }
-            if (!S_ISREG(st.st_mode)) {
-                continue;
-            }
-
+    walkFiles(
+        options.root,
+        [&](const fs::path& path, const struct stat& st) {
             const auto size = static_cast<std::uintmax_t>(st.st_size);
             if (size < options.minSizeBytes) {
-                continue;
+                return;
             }
-
             BigFile found;
-            found.path = entry.path();
+            found.path = path;
             found.sizeBytes = size;
             std::error_code timeEc;
-            found.lastModified = fs::last_write_time(entry.path(), timeEc);
+            found.lastModified = fs::last_write_time(path, timeEc);
             offer(std::move(found));
-        }
-    }
+        },
+        cancelled, progress);
 
     return results;
 }

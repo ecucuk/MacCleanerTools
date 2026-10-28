@@ -10,6 +10,7 @@
 #include "maccleaner/format.hpp"
 #include "maccleaner/safety.hpp"
 #include "maccleaner/scanner.hpp"
+#include "maccleaner/walk.hpp"
 
 #include <algorithm>
 #include <fstream>
@@ -773,6 +774,22 @@ void testCliHelpShortCircuits() {
 
 } // namespace
 
+// --- walk ---------------------------------------------------------------
+
+void testWalkFilesSkipsFilteredDirs() {
+    SizedTree tree;
+    writeFileOfSize(tree.top() / "Lib.photoslibrary" / "originals" / "b.jpg", 1);
+
+    std::vector<fs::path> seen;
+    maccleaner::walkFiles(
+        tree.top(), [&](const fs::path& path, const struct stat&) { seen.push_back(path); },
+        nullptr, {}, [](const fs::path& dir) { return dir.extension() != ".photoslibrary"; });
+
+    CHECK_EQ(seen.size(), 3u); // big.bin, small.bin, loose.bin
+    CHECK(std::none_of(seen.begin(), seen.end(),
+                       [](const fs::path& p) { return p.filename() == "b.jpg"; }));
+}
+
 int main() {
     testHumanReadableBytes();
 
@@ -804,6 +821,7 @@ int main() {
     testBigFilesIgnoresSymlinks();
     testBigFilesStreamsResults();
     testBigFilesCancellation();
+    testWalkFilesSkipsFilteredDirs();
 
     testClassifyProcess();
     testDiffProcessSamplesComputesCpuPercent();

@@ -2,6 +2,7 @@
 #include "maccleaner/cleaner.hpp"
 #include "maccleaner/cli.hpp"
 #include "maccleaner/format.hpp"
+#include "maccleaner/photos.hpp"
 #include "maccleaner/processes.hpp"
 #include "maccleaner/safety.hpp"
 #include "maccleaner/scanner.hpp"
@@ -104,6 +105,47 @@ int runBigFiles(const CliOptions& options) {
     std::cout << "================================\n";
     std::cout << files.size() << " file(s), " << humanReadableBytes(total) << " total (threshold "
                << humanReadableBytes(scanOptions.minSizeBytes) << ", top " << scanOptions.maxResults << ")\n";
+    return 0;
+}
+
+int runPhotos(const CliOptions& options) {
+    const std::filesystem::path root = options.under.empty() ? homeDirectory() : std::filesystem::path(options.under);
+    std::error_code ec;
+    if (!std::filesystem::is_directory(root, ec) || ec) {
+        std::cerr << "error: not a directory: " << root.string() << "\n";
+        return 2;
+    }
+
+    const photos::FolderScan scan = photos::scanPhotoFolder(root);
+    const auto groups = photos::groupDuplicates(scan.photos, options.distance);
+
+    auto printPhoto = [](const char* mark, const photos::PhotoInfo& p) {
+        std::printf("    %-5s %5dx%-5d  sharp %8.1f  %9s  %s\n", mark, p.pixelWidth, p.pixelHeight, p.sharpness,
+                    humanReadableBytes(p.sizeBytes).c_str(), p.id.c_str());
+    };
+
+    std::cout << "Duplicate groups: " << groups.size() << "\n";
+    for (std::size_t g = 0; g < groups.size(); ++g) {
+        std::cout << "  Group " << (g + 1) << "\n";
+        for (std::size_t m = 0; m < groups[g].size(); ++m) {
+            printPhoto(m == 0 ? "keep" : "", scan.photos[groups[g][m]]);
+        }
+    }
+
+    std::vector<const photos::PhotoInfo*> blurry;
+    for (const photos::PhotoInfo& p : scan.photos) {
+        if (p.sharpness < options.blurThreshold) {
+            blurry.push_back(&p);
+        }
+    }
+    std::sort(blurry.begin(), blurry.end(), [](auto* a, auto* b) { return a->sharpness < b->sharpness; });
+    std::cout << "Blurry (sharpness < " << options.blurThreshold << "): " << blurry.size() << "\n";
+    for (const photos::PhotoInfo* p : blurry) {
+        printPhoto("", *p);
+    }
+
+    std::cout << "================================\n";
+    std::cout << scan.photos.size() << " photo(s) analysed, " << scan.undecodable << " could not be decoded\n";
     return 0;
 }
 
@@ -243,6 +285,8 @@ int main(int argc, char** argv) {
             return runBigFiles(options);
         case Command::Processes:
             return runProcesses(options);
+        case Command::Photos:
+            return runPhotos(options);
     }
     return 0;
 }

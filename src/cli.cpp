@@ -61,6 +61,7 @@ void printUsage() {
         "  mac_cleaner clean [--only=<categories>] [--apply] [--permanent] [--yes]\n"
         "  mac_cleaner bigfiles [--under=<path>] [--min=<size>] [--top=<n>]\n"
         "  mac_cleaner processes [--sort=cpu|mem] [--top=<n>]\n"
+        "  mac_cleaner photos [--under=<path>] [--distance=<n>] [--blur=<t>]\n"
         "\n"
         "Commands:\n"
         "  scan       Report what would be cleaned and how much space it would free (default).\n"
@@ -68,6 +69,8 @@ void printUsage() {
         "             actually remove items (moved to Trash by default).\n"
         "  bigfiles   List the largest files under a directory (default: your home).\n"
         "  processes  List your processes by CPU or memory use (1s sampling window).\n"
+        "  photos     Report duplicate and blurry photos under a directory (default: your home).\n"
+        "             Report only; remove photos from the app.\n"
         "\n"
         "Options (scan/clean):\n"
         "  --only=<categories>  Comma-separated subset, e.g. --only=caches,derived-data\n"
@@ -87,6 +90,11 @@ void printUsage() {
         "  --sort=cpu|mem        Sort order (default: cpu).\n"
         "  --top=<n>             Show at most n processes (default: 20).\n"
         "\n"
+        "Options (photos):\n"
+        "  --under=<path>        Folder to scan (default: home directory).\n"
+        "  --distance=<n>        Max hash difference for duplicates, 0-64 (default: 6).\n"
+        "  --blur=<t>            Sharpness below which a photo is blurry (default: 100).\n"
+        "\n"
         "  --help                 Show this message.\n";
 }
 
@@ -97,11 +105,13 @@ std::optional<CliOptions> parseArgs(int argc, char** argv, CliParseError& error)
 
     std::size_t index = 0;
     if (!args.empty() &&
-        (args[0] == "scan" || args[0] == "clean" || args[0] == "bigfiles" || args[0] == "processes")) {
-        options.command = (args[0] == "scan")      ? Command::Scan
-                          : (args[0] == "clean")    ? Command::Clean
-                          : (args[0] == "bigfiles") ? Command::BigFiles
-                                                     : Command::Processes;
+        (args[0] == "scan" || args[0] == "clean" || args[0] == "bigfiles" || args[0] == "processes" ||
+         args[0] == "photos")) {
+        options.command = (args[0] == "scan")       ? Command::Scan
+                          : (args[0] == "clean")     ? Command::Clean
+                          : (args[0] == "bigfiles")  ? Command::BigFiles
+                          : (args[0] == "photos")    ? Command::Photos
+                                                      : Command::Processes;
         index = 1;
     }
 
@@ -155,6 +165,24 @@ std::optional<CliOptions> parseArgs(int argc, char** argv, CliParseError& error)
                 return std::nullopt;
             }
             options.top = static_cast<std::size_t>(parsed);
+        } else if (arg.rfind("--distance=", 0) == 0) {
+            const std::string spec(arg.substr(std::string_view("--distance=").size()));
+            char* end = nullptr;
+            const long parsed = std::strtol(spec.c_str(), &end, 10);
+            if (end == spec.c_str() || *end != '\0' || parsed < 0 || parsed > 64) {
+                error.message = "--distance needs an integer from 0 to 64";
+                return std::nullopt;
+            }
+            options.distance = static_cast<int>(parsed);
+        } else if (arg.rfind("--blur=", 0) == 0) {
+            const std::string spec(arg.substr(std::string_view("--blur=").size()));
+            char* end = nullptr;
+            const double parsed = std::strtod(spec.c_str(), &end);
+            if (end == spec.c_str() || *end != '\0' || !(parsed >= 0)) {
+                error.message = "--blur needs a non-negative number";
+                return std::nullopt;
+            }
+            options.blurThreshold = parsed;
         } else {
             error.message = "unrecognized argument: " + std::string(arg);
             return std::nullopt;

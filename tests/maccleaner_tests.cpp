@@ -589,6 +589,27 @@ void testCliParsesBigFiles() {
     CHECK_EQ(options->top, 25u);
 }
 
+void testCliParsesPhotos() {
+    CliParseError error;
+    const char* argv[] = {"mac_cleaner", "photos", "--under=/tmp", "--distance=4", "--blur=55.5"};
+    const auto options = parseArgs(5, const_cast<char**>(argv), error);
+    CHECK(options.has_value());
+    CHECK(options->command == Command::Photos);
+    CHECK(options->under == "/tmp");
+    CHECK_EQ(options->distance, 4);
+    CHECK_EQ(options->blurThreshold, 55.5);
+
+    const char* defaults[] = {"mac_cleaner", "photos"};
+    const auto plain = parseArgs(2, const_cast<char**>(defaults), error);
+    CHECK_EQ(plain->distance, maccleaner::photos::kDefaultMaxDistance);
+    CHECK_EQ(plain->blurThreshold, maccleaner::photos::kDefaultBlurThreshold);
+
+    const char* bad[] = {"mac_cleaner", "photos", "--distance=x"};
+    CHECK(!parseArgs(3, const_cast<char**>(bad), error).has_value());
+    const char* tooFar[] = {"mac_cleaner", "photos", "--distance=65"};
+    CHECK(!parseArgs(3, const_cast<char**>(tooFar), error).has_value());
+}
+
 // --- processes ----------------------------------------------------------
 
 using maccleaner::classifyProcess;
@@ -1009,6 +1030,7 @@ int main() {
     testCliRejectsPermanentWithoutApply();
     testCliHelpShortCircuits();
     testCliParsesBigFiles();
+    testCliParsesPhotos();
 
     if (g_failures == 0) {
         std::cout << "All tests passed.\n";

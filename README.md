@@ -65,6 +65,18 @@ CFLAGS="-isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -B/Library
 sh tools/build_icon.sh
 ```
 
+### Empty-state art and scan animation
+
+`resources/art/` holds the empty-state illustrations (light and dark PNGs,
+plus editable Krita `.kra` files) and `scan.mov`, the scan animation (HEVC
+with alpha, rendered in Blender). Both are generated from code in the same
+folder (`illustrations.py`, `scan_animation.py`) and committed, so a normal
+build needs neither tool. After a change, re-run:
+
+```sh
+sh tools/build_art.sh   # needs Krita, Blender and ffmpeg
+```
+
 ## Usage — CLI
 
 ```sh

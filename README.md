@@ -8,6 +8,9 @@ behind one sidebar:
   and package-manager caches (Homebrew, npm, Yarn, pip).
 - **Large Files** — walk any directory (default: your home) and list the
   largest files, with Reveal-in-Finder and Move-to-Trash actions.
+- **Photo Cleaner** — find duplicate, near-duplicate and blurry photos in a
+  folder or in the Photos library, review them, and remove the ones you
+  choose.
 - **Performance** — a live view of your processes by CPU, memory and
   uptime, with heavy consumers flagged and guarded Quit / Force Quit.
 
@@ -47,6 +50,8 @@ build/mac_cleaner bigfiles                       # 100 largest files >= 100 MB u
 build/mac_cleaner bigfiles --under=~/Movies --min=1G --top=20
 build/mac_cleaner processes                      # your 20 hungriest processes (1s sample)
 build/mac_cleaner processes --sort=mem --top=10
+build/mac_cleaner photos --under=~/Pictures      # duplicate groups + blurry photos (report only)
+build/mac_cleaner photos --under=~/Pictures --distance=3 --blur=50
 ```
 
 ## Usage — GUI
@@ -75,6 +80,35 @@ recognized. **Space** (or the Quick Look button) opens the full Quick Look
 panel exactly like Finder: play videos and music with transport controls,
 zoom into photos, arrow through a multi-selection — and unlike the inline
 pane it previews any file type, PDFs and archives included.
+
+**Photo Cleaner** scans a folder (**Scan Folder…**) or the Photos library
+(**Scan Photos Library**, which asks for Photos access the first time) and
+lists two sections: *Duplicates*, grouped, and *Blurry*. Each photo is
+decoded once at 512 px (ImageIO for files, PhotoKit for the library) into
+grayscale, then:
+
+- **Duplicates** use a 64-bit difference hash (dHash). Two photos whose
+  hashes differ in at most *Duplicate tolerance* bits (default 6, 0 =
+  identical) are grouped, transitively. This catches resized, re-encoded
+  (JPEG ↔ HEIC), lightly edited and burst copies — not merely byte-identical
+  files.
+- **Blurry** photos have a *sharpness* (variance of the Laplacian) below the
+  threshold (default 100). On real photos sharp shots score in the hundreds
+  and visibly blurred ones under 20; a soft portrait with a smooth
+  background can land low too, so the list is for review, not a verdict.
+
+Nothing is checked for you: you look at each photo and tick what should go,
+which may be nothing. Every row has a thumbnail, the selected photo shows in
+the preview pane, and **Large Preview** (or double-click, or **Space**)
+shows it large: the Quick Look panel for folder photos (zoom, arrow through
+the selection), an image window for library photos. Library previews use
+what is stored on this Mac and never download from iCloud. Each group's **best copy** — most pixels, then
+sharpest, then oldest — is labelled so you can see which one to keep. Both
+thresholds can be changed after a scan without rescanning. Folder photos go
+to the Trash through `isSafeToDelete()` with the scanned folder as the only
+allowed root. Library photos are deleted through Photos itself, which shows
+its own confirmation and keeps them in *Recently Deleted* for 30 days;
+photos that are only in iCloud are never downloaded and count as skipped.
 
 **Performance** samples your processes every two seconds and shows CPU %,
 memory, kind (App / System / Background), uptime and pid in a sortable
@@ -164,7 +198,11 @@ allowlist-first rather than denylist-first:
 3. **Hard denylist as a second layer.** `/`, `/System`, `/Library`, `/usr`,
    `/bin`, `/sbin`, `/private`, `/Applications`, `/Volumes`, and the home
    directory itself are always rejected, even if something were (wrongly)
-   registered as an allowed root that contains them.
+   registered as an allowed root that contains them. So is anything inside
+   a Photos library package (`*.photoslibrary`): its `originals/` look like
+   plain photo files, but removing them behind Photos' back corrupts the
+   library. The photo folder scan does not enter these packages either;
+   library photos are only removed through PhotoKit.
 4. **No deleting through symlinks.** `isSafeToDelete` `lstat`s the
    candidate first and refuses anything that is itself a symlink. The
    scanner's directory-size walk also never follows symlinked children when

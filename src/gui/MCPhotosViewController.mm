@@ -20,7 +20,21 @@ NSString *const kDetailColumn = @"detail";
 
 constexpr CGFloat kThumbnailPixels = 96;   // 48 pt rows on Retina
 constexpr CGFloat kPreviewPixels = 1600;
+constexpr CGFloat kLargePreviewPixels = 3000;
 constexpr NSInteger kMaxDistanceStep = 16; // beyond this, unrelated photos merge
+
+// A 3000 px photo's intrinsic size would otherwise squash the toolbars or
+// grow the window; the view should only ever scale the image into its frame.
+NSImageView *imageViewWithoutIntrinsicSize() {
+    NSImageView *view = [[NSImageView alloc] initWithFrame:NSZeroRect];
+    view.imageScaling = NSImageScaleProportionallyDown;
+    for (NSLayoutConstraintOrientation axis :
+         {NSLayoutConstraintOrientationHorizontal, NSLayoutConstraintOrientationVertical}) {
+        [view setContentCompressionResistancePriority:1 forOrientation:axis];
+        [view setContentHuggingPriority:1 forOrientation:axis];
+    }
+    return view;
+}
 
 } // namespace
 
@@ -37,7 +51,7 @@ constexpr NSInteger kMaxDistanceStep = 16; // beyond this, unrelated photos merg
 @implementation MCPhotoNode
 @end
 
-/// Space toggles the Quick Look panel, exactly like Finder (and Large Files).
+/// Space toggles the large preview, like Finder's Quick Look (and Large Files).
 @interface MCPhotoOutlineView : NSOutlineView
 @end
 
@@ -47,7 +61,7 @@ constexpr NSInteger kMaxDistanceStep = 16; // beyond this, unrelated photos merg
     NSString *chars = event.charactersIgnoringModifiers;
     if (chars.length == 1 && [chars characterAtIndex:0] == ' ' &&
         (event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask) == 0) {
-        [NSApp sendAction:@selector(togglePreviewPanel:) to:nil from:self];
+        [NSApp sendAction:@selector(toggleLargePreview:) to:nil from:self];
         return;
     }
     [super keyDown:event];
@@ -76,6 +90,9 @@ constexpr NSInteger kMaxDistanceStep = 16; // beyond this, unrelated photos merg
 @property(nonatomic, strong) NSTextField *blurField;
 @property(nonatomic, strong) MCPhotoOutlineView *outlineView;
 @property(nonatomic, strong) NSImageView *previewView;
+@property(nonatomic, strong) NSTextField *previewPlaceholder;
+@property(nonatomic, strong) NSButton *largePreviewButton;
+@property(nonatomic, strong, nullable) NSWindow *largePreviewWindow; // library photos only
 @property(nonatomic, strong) NSTextField *statusLabel;
 @property(nonatomic, strong) NSButton *trashButton;
 
@@ -157,6 +174,8 @@ constexpr NSInteger kMaxDistanceStep = 16; // beyond this, unrelated photos merg
     self.outlineView.rowHeight = 52;
     self.outlineView.usesAlternatingRowBackgroundColors = YES;
     self.outlineView.allowsMultipleSelection = YES;
+    self.outlineView.target = self;
+    self.outlineView.doubleAction = @selector(showLargePreview:);
 
     NSTableColumn *checkColumn = [[NSTableColumn alloc] initWithIdentifier:kCheckColumn];
     checkColumn.title = @"";
@@ -185,24 +204,39 @@ constexpr NSInteger kMaxDistanceStep = 16; // beyond this, unrelated photos merg
     scrollView.borderType = NSBezelBorder;
 
     // --- preview -----------------------------------------------------------
-    self.previewView = [[NSImageView alloc] initWithFrame:NSZeroRect];
-    self.previewView.imageScaling = NSImageScaleProportionallyDown;
-    [self.previewView setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
-                                                forOrientation:NSLayoutConstraintOrientationHorizontal];
-    [self.previewView setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
-                                                forOrientation:NSLayoutConstraintOrientationVertical];
+    self.previewView = imageViewWithoutIntrinsicSize();
+    self.previewView.translatesAutoresizingMaskIntoConstraints = NO;
+
+    self.previewPlaceholder = [NSTextField wrappingLabelWithString:
+        @"Select a photo to preview it.\nDouble-click or press Space for a large preview."];
+    self.previewPlaceholder.alignment = NSTextAlignmentCenter;
+    self.previewPlaceholder.textColor = NSColor.secondaryLabelColor;
+    self.previewPlaceholder.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSView *previewContainer = [[NSView alloc] initWithFrame:NSZeroRect];
+    [previewContainer addSubview:self.previewView];
+    [previewContainer addSubview:self.previewPlaceholder];
+    [NSLayoutConstraint activateConstraints:@[
+        [self.previewView.topAnchor constraintEqualToAnchor:previewContainer.topAnchor constant:8],
+        [self.previewView.bottomAnchor constraintEqualToAnchor:previewContainer.bottomAnchor constant:-8],
+        [self.previewView.leadingAnchor constraintEqualToAnchor:previewContainer.leadingAnchor constant:8],
+        [self.previewView.trailingAnchor constraintEqualToAnchor:previewContainer.trailingAnchor constant:-8],
+        [self.previewPlaceholder.centerYAnchor constraintEqualToAnchor:previewContainer.centerYAnchor],
+        [self.previewPlaceholder.leadingAnchor constraintEqualToAnchor:previewContainer.leadingAnchor constant:12],
+        [self.previewPlaceholder.trailingAnchor constraintEqualToAnchor:previewContainer.trailingAnchor constant:-12],
+    ]];
 
     NSSplitView *splitView = [[NSSplitView alloc] initWithFrame:NSZeroRect];
     splitView.vertical = YES;
     splitView.dividerStyle = NSSplitViewDividerStyleThin;
     [splitView addArrangedSubview:scrollView];
-    [splitView addArrangedSubview:self.previewView];
+    [splitView addArrangedSubview:previewContainer];
     [splitView setHoldingPriority:NSLayoutPriorityDefaultLow + 10 forSubviewAtIndex:1];
     splitView.autosaveName = @"MCPhotosSplit";
     splitView.translatesAutoresizingMaskIntoConstraints = NO;
     [NSLayoutConstraint activateConstraints:@[
         [scrollView.widthAnchor constraintGreaterThanOrEqualToConstant:380],
-        [self.previewView.widthAnchor constraintGreaterThanOrEqualToConstant:200],
+        [previewContainer.widthAnchor constraintGreaterThanOrEqualToConstant:300],
     ]];
 
     // --- bottom bar ----------------------------------------------------------
@@ -213,13 +247,20 @@ constexpr NSInteger kMaxDistanceStep = 16; // beyond this, unrelated photos merg
     [self.statusLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
                                                 forOrientation:NSLayoutConstraintOrientationHorizontal];
 
+    self.largePreviewButton = [NSButton buttonWithTitle:@"Large Preview" target:self
+                                                 action:@selector(showLargePreview:)];
+    self.largePreviewButton.toolTip = @"Show the selected photo large (double-click or Space)";
+    self.largePreviewButton.enabled = NO;
+
     self.trashButton = [NSButton buttonWithTitle:@"Move to Trash…" target:self action:@selector(removeChecked:)];
     self.trashButton.enabled = NO;
 
     NSView *spacer = [[NSView alloc] initWithFrame:NSZeroRect];
     [spacer setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
 
-    NSStackView *bottomBar = [NSStackView stackViewWithViews:@[ self.statusLabel, spacer, self.trashButton ]];
+    NSStackView *bottomBar = [NSStackView stackViewWithViews:@[
+        self.statusLabel, spacer, self.largePreviewButton, self.trashButton
+    ]];
     bottomBar.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     bottomBar.spacing = 8;
     bottomBar.translatesAutoresizingMaskIntoConstraints = NO;
@@ -569,6 +610,8 @@ constexpr NSInteger kMaxDistanceStep = 16; // beyond this, unrelated photos merg
 - (void)updatePreview {
     MCPhotoItem *item = [self selectedItems].firstObject;
     self.previewView.image = nil;
+    self.previewPlaceholder.hidden = (item != nil);
+    self.largePreviewButton.enabled = (item != nil);
     if (item == nil) {
         return;
     }
@@ -579,6 +622,55 @@ constexpr NSInteger kMaxDistanceStep = 16; // beyond this, unrelated photos merg
                       // A newer selection may have won the race.
                       if ([weakSelf selectedItems].firstObject == item) {
                           weakSelf.previewView.image = image;
+                      }
+                  }];
+}
+
+/// Space: closes an open large preview, otherwise opens one.
+- (void)toggleLargePreview:(id)sender {
+    if (self.largePreviewWindow.isVisible) {
+        [self.largePreviewWindow orderOut:nil];
+    } else {
+        [self showLargePreview:sender];
+    }
+}
+
+/// Double-click, Space or the Large Preview button. Folder photos use the
+/// Quick Look panel (zoom, arrow through the selection, like Finder); library
+/// photos have no file to hand Quick Look, so they get a plain image window.
+- (void)showLargePreview:(id)sender {
+    MCPhotoItem *item = [self selectedItems].firstObject;
+    if (item == nil) {
+        return;
+    }
+    if (!item.isLibraryAsset) {
+        [self togglePreviewPanel:sender];
+        return;
+    }
+    if (self.largePreviewWindow == nil) {
+        NSWindow *window = [[NSWindow alloc]
+            initWithContentRect:NSMakeRect(0, 0, 900, 680)
+                      styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
+                        backing:NSBackingStoreBuffered
+                          defer:YES];
+        window.releasedWhenClosed = NO;
+        NSImageView *imageView = imageViewWithoutIntrinsicSize();
+        imageView.imageScaling = NSImageScaleProportionallyUpOrDown;
+        window.contentView = imageView;
+        [window center];
+        self.largePreviewWindow = window;
+    }
+    self.largePreviewWindow.title = item.name;
+    NSImageView *imageView = (NSImageView *)self.largePreviewWindow.contentView;
+    imageView.image = self.previewView.image; // shown at once, sharpened below
+    [self.largePreviewWindow makeKeyAndOrderFront:nil];
+
+    __weak MCPhotosViewController *weakSelf = self;
+    [self.model imageForItem:item
+                   maxPixels:kLargePreviewPixels
+                  completion:^(NSImage *image) {
+                      if (image != nil && [weakSelf.largePreviewWindow.title isEqualToString:item.name]) {
+                          imageView.image = image;
                       }
                   }];
 }
@@ -749,6 +841,10 @@ constexpr NSInteger kMaxDistanceStep = 16; // beyond this, unrelated photos merg
 - (void)outlineViewSelectionDidChange:(NSNotification *)notification {
     [self updatePreview];
     [self reloadPreviewPanelIfVisible];
+    // An open large preview follows the selection, as the Quick Look panel does.
+    if (self.largePreviewWindow.isVisible && [self selectedItems].firstObject.isLibraryAsset) {
+        [self showLargePreview:nil];
+    }
 }
 
 @end

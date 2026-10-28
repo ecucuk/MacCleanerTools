@@ -66,7 +66,10 @@ NS_ASSUME_NONNULL_BEGIN
                  completion:(void (^)(BOOL ok, NSString *_Nullable error))completion;
 
 /// Colour image of at most `maxPixels` on the long edge, for thumbnails and
-/// the preview. `completion` runs on main, with nil if it cannot be loaded.
+/// the preview. `completion` runs on main. For a folder photo it runs once,
+/// with nil if the file cannot be decoded. For a library photo it may run
+/// twice (a quick version, then a better one) and does not run at all when
+/// nothing is stored on this Mac.
 - (void)imageForItem:(MCPhotoItem *)item
            maxPixels:(CGFloat)maxPixels
           completion:(void (^)(NSImage *_Nullable image))completion;

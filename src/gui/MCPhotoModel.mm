@@ -287,14 +287,20 @@ static void (^throttled(void (^progress)(uint64_t, NSString *)))(uint64_t, NSStr
             completion(nil);
             return;
         }
+        // Opportunistic: HighQualityFormat yields nil when the full-size
+        // original is only in iCloud, which left the preview blank. This
+        // delivers the best local version (possibly twice, better second).
         PHImageRequestOptions *options = [[PHImageRequestOptions alloc] init];
-        options.deliveryMode = PHImageRequestOptionsDeliveryModeHighQualityFormat;
+        options.deliveryMode = PHImageRequestOptionsDeliveryModeOpportunistic;
         options.networkAccessAllowed = NO;
         [[PHImageManager defaultManager] requestImageForAsset:asset
                                                    targetSize:CGSizeMake(maxPixels, maxPixels)
                                                   contentMode:PHImageContentModeAspectFit
                                                       options:options
                                                 resultHandler:^(NSImage *image, NSDictionary *) {
+            if (image == nil) {
+                return; // keep whatever an earlier delivery showed
+            }
             dispatch_async(dispatch_get_main_queue(), ^{
                 completion(image);
             });

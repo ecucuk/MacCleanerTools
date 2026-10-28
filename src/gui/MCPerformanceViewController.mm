@@ -2,6 +2,7 @@
 
 #import "MCOptimizeSheetController.h"
 #import "MCProcessModel.h"
+#import "MCTheme.h"
 
 #include "maccleaner/format.hpp"
 
@@ -137,6 +138,7 @@ NSString *kindLabel(MCProcessKind kind) {
     self.optimizeButton = [NSButton buttonWithTitle:@"Optimize…" target:self action:@selector(optimize:)];
     self.optimizeButton.bezelStyle = NSBezelStyleRounded;
     self.optimizeButton.keyEquivalent = @"\r";
+    [MCTheme stylePrimaryButton:self.optimizeButton];
     self.optimizeButton.toolTip = @"Find processes that can be closed safely";
 
     self.optimizeSpinner = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
@@ -159,7 +161,6 @@ NSString *kindLabel(MCProcessKind kind) {
     self.tableView = [[NSTableView alloc] initWithFrame:NSZeroRect];
     self.tableView.dataSource = self;
     self.tableView.delegate = self;
-    self.tableView.usesAlternatingRowBackgroundColors = YES;
     self.tableView.allowsMultipleSelection = YES;
 
     struct ColumnSpec {
@@ -196,8 +197,8 @@ NSString *kindLabel(MCProcessKind kind) {
     scrollView.documentView = self.tableView;
     scrollView.hasVerticalScroller = YES;
     scrollView.autohidesScrollers = YES;
-    scrollView.borderType = NSBezelBorder;
     scrollView.translatesAutoresizingMaskIntoConstraints = NO;
+    [MCTheme styleCard:scrollView];
 
     // --- bottom bar ------------------------------------------------------
     self.statusLabel = [NSTextField labelWithString:@"Sampling…"];

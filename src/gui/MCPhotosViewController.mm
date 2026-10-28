@@ -1,6 +1,8 @@
 #import "MCPhotosViewController.h"
 
+#import "MCEmptyStateView.h"
 #import "MCPhotoModel.h"
+#import "MCTheme.h"
 
 #import <Quartz/Quartz.h>
 
@@ -78,6 +80,8 @@ NSImageView *imageViewWithoutIntrinsicSize() {
 @property(nonatomic, strong) NSMutableSet<NSString *> *checked; // by identifier
 @property(nonatomic, copy, nullable) NSString *scanRoot;        // nil = library results
 @property(nonatomic) NSUInteger skipped;
+@property(nonatomic) BOOL hasScanned;
+@property(nonatomic, strong) MCEmptyStateView *emptyState;
 @property(nonatomic, copy, nullable) NSArray<NSArray<MCPhotoItem *> *> *groups; // cache; nil = stale
 @property(nonatomic) NSInteger groupedDistance;
 @property(nonatomic, strong) NSCache<NSString *, NSImage *> *thumbnails;
@@ -129,6 +133,7 @@ NSImageView *imageViewWithoutIntrinsicSize() {
 
     self.folderButton = [NSButton buttonWithTitle:@"Scan Folder…" target:self action:@selector(scanFolder:)];
     self.libraryButton = [NSButton buttonWithTitle:@"Scan Photos Library" target:self action:@selector(scanLibrary:)];
+    [MCTheme stylePrimaryButton:self.folderButton];
     self.stopButton = [NSButton buttonWithTitle:@"Stop" target:self action:@selector(stopScan:)];
     self.stopButton.hidden = YES;
 
@@ -174,7 +179,6 @@ NSImageView *imageViewWithoutIntrinsicSize() {
     self.outlineView.dataSource = self;
     self.outlineView.delegate = self;
     self.outlineView.rowHeight = 52;
-    self.outlineView.usesAlternatingRowBackgroundColors = YES;
     self.outlineView.allowsMultipleSelection = YES;
     self.outlineView.target = self;
     self.outlineView.doubleAction = @selector(showLargePreview:);
@@ -203,7 +207,9 @@ NSImageView *imageViewWithoutIntrinsicSize() {
     scrollView.documentView = self.outlineView;
     scrollView.hasVerticalScroller = YES;
     scrollView.autohidesScrollers = YES;
-    scrollView.borderType = NSBezelBorder;
+    [MCTheme styleCard:scrollView];
+    self.emptyState = [[MCEmptyStateView alloc] initWithIllustration:@"empty-photos"];
+    NSView *card = [self.emptyState wrapCard:scrollView];
 
     // --- preview -----------------------------------------------------------
     self.previewView = imageViewWithoutIntrinsicSize();
@@ -231,7 +237,7 @@ NSImageView *imageViewWithoutIntrinsicSize() {
     NSSplitView *splitView = [[NSSplitView alloc] initWithFrame:NSZeroRect];
     splitView.vertical = YES;
     splitView.dividerStyle = NSSplitViewDividerStyleThin;
-    [splitView addArrangedSubview:scrollView];
+    [splitView addArrangedSubview:card];
     [splitView addArrangedSubview:previewContainer];
     [splitView setHoldingPriority:NSLayoutPriorityDefaultLow + 10 forSubviewAtIndex:1];
     splitView.autosaveName = @"MCPhotosSplit";
@@ -300,6 +306,20 @@ NSImageView *imageViewWithoutIntrinsicSize() {
     ]];
 
     [self updateDistanceLabel];
+    [self updateEmptyState];
+}
+
+- (void)updateEmptyState {
+    const BOOL empty = self.roots.firstObject.children.count == 0 && self.roots.lastObject.children.count == 0;
+    if (!empty) {
+        [self.emptyState hide];
+    } else if (self.model.scanning) {
+        [self.emptyState showScanningWithMessage:@"Comparing photos and measuring sharpness…"];
+    } else if (!self.hasScanned) {
+        [self.emptyState showIllustrationWithMessage:@"Scan a folder or your Photos library to find duplicate and blurry photos."];
+    } else {
+        [self.emptyState showIllustrationWithMessage:@"No duplicate or blurry photos found."];
+    }
 }
 
 #pragma mark - Scanning
@@ -334,6 +354,7 @@ NSImageView *imageViewWithoutIntrinsicSize() {
                 completion:^(NSArray<MCPhotoItem *> *items, NSUInteger skipped) {
                     [weakSelf finishScanWithItems:items skipped:skipped root:root];
                 }];
+    [self updateEmptyState]; // after scanFolder:, so `scanning` is already set
 }
 
 - (void)scanLibrary:(id)sender {
@@ -352,6 +373,7 @@ NSImageView *imageViewWithoutIntrinsicSize() {
                 strongSelf.statusLabel.stringValue = error;
             }
         }];
+    [self updateEmptyState];
 }
 
 - (void)stopScan:(id)sender {
@@ -382,6 +404,7 @@ NSImageView *imageViewWithoutIntrinsicSize() {
     self.scanRoot = root;
     self.items = items;
     self.skipped = skipped;
+    self.hasScanned = YES;
     [self.thumbnails removeAllObjects];
     [self rebuildTree];
     [self showSummary];
@@ -477,6 +500,7 @@ NSImageView *imageViewWithoutIntrinsicSize() {
     [self.outlineView expandItem:blurryRoot];
     [self updateTrashButton];
     [self updatePreview];
+    [self updateEmptyState];
 }
 
 - (void)showSummary {

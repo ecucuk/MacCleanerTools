@@ -1,6 +1,9 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
+#include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -54,5 +57,44 @@ double sharpness(const GrayImage& image);
 // Groups are ordered by their keeper's id.
 std::vector<std::vector<std::size_t>> groupDuplicates(const std::vector<PhotoInfo>& photos,
                                                       int maxDistance = kDefaultMaxDistance);
+
+// --- folder source ---------------------------------------------------------
+
+// Longest edge of the grayscale decode that dHash and sharpness run on.
+constexpr int kDecodeMaxPixels = 512;
+
+struct Decoded {
+    GrayImage gray;                // at most kDecodeMaxPixels on the long edge
+    int pixelWidth = 0;            // original size
+    int pixelHeight = 0;
+    std::int64_t createdUnix = 0;  // EXIF capture date, 0 if absent
+};
+
+using DecodeFn = std::function<bool(const std::filesystem::path& path, Decoded& out)>;
+
+// Platform decoder (ImageIO on macOS, EXIF orientation applied). Returns
+// false for anything it cannot decode; the non-Apple fallback always does.
+bool decodeImageFile(const std::filesystem::path& path, Decoded& out);
+
+// Case-insensitive check against the still-image formats ImageIO reads
+// (JPEG, HEIF, PNG, TIFF, WebP and common camera RAW).
+bool isPhotoExtension(const std::filesystem::path& path);
+
+struct FolderScan {
+    std::vector<PhotoInfo> photos;
+    std::uint64_t undecodable = 0; // photo-named files the decoder rejected
+};
+
+using PhotoProgress = std::function<void(std::uint64_t done, const std::filesystem::path& current)>;
+
+// Walks `root` with walkFiles (EPERM-tolerant, no symlinks), never entering
+// a Photos library package, and analyses every file with a photo extension.
+// The creation date falls back to the file's birth time when the image has
+// no EXIF date. `progress` fires once per decoded file, on the calling
+// thread; `cancelled` stops the scan early with what it has so far.
+FolderScan scanPhotoFolder(const std::filesystem::path& root,
+                           const std::atomic<bool>* cancelled = nullptr,
+                           const PhotoProgress& progress = {},
+                           const DecodeFn& decode = decodeImageFile);
 
 } // namespace maccleaner::photos

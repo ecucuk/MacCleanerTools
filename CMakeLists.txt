@@ -55,6 +55,11 @@ if(APPLE AND MACCLEANER_USE_NATIVE_TRASH)
 else()
     list(APPEND MACCLEANER_APPLE_SOURCES src/platform/trash_fallback.cpp)
 endif()
+if(APPLE)
+    list(APPEND MACCLEANER_APPLE_SOURCES src/platform/image_mac.mm)
+else()
+    list(APPEND MACCLEANER_APPLE_SOURCES src/platform/image_fallback.cpp)
+endif()
 
 add_library(maccleaner_core STATIC
     ${MACCLEANER_CORE_SOURCES}
@@ -72,6 +77,17 @@ if(APPLE AND MACCLEANER_USE_NATIVE_TRASH)
     find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
     target_link_libraries(maccleaner_core PRIVATE ${FOUNDATION_FRAMEWORK})
     set_source_files_properties(src/platform/trash_mac.mm PROPERTIES
+        COMPILE_FLAGS "-fobjc-arc"
+    )
+endif()
+
+if(APPLE)
+    find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
+    find_library(IMAGEIO_FRAMEWORK ImageIO REQUIRED)
+    find_library(COREGRAPHICS_FRAMEWORK CoreGraphics REQUIRED)
+    target_link_libraries(maccleaner_core PRIVATE
+        ${FOUNDATION_FRAMEWORK} ${IMAGEIO_FRAMEWORK} ${COREGRAPHICS_FRAMEWORK})
+    set_source_files_properties(src/platform/image_mac.mm PROPERTIES
         COMPILE_FLAGS "-fobjc-arc"
     )
 endif()

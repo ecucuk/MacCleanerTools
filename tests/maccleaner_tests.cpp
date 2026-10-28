@@ -917,6 +917,35 @@ void testGroupNoPairs() {
     CHECK(photos::groupDuplicates({info("only", 1, 10, 1, 0)}).empty());
 }
 
+void testScanPhotoFolderUsesDecoder() {
+    SizedTree tree;
+    for (const char* name : {"a.jpg", "sub/b.JPG", "notes.txt", "bad.png", "L.photoslibrary/originals/x.jpg"}) {
+        writeFileOfSize(tree.top() / name, 1);
+    }
+
+    const auto fakeDecode = [](const fs::path& path, photos::Decoded& out) {
+        if (path.filename() == "bad.png") {
+            return false;
+        }
+        out.gray = makeImage(64, 64, rampPixel);
+        out.pixelWidth = 640;
+        out.pixelHeight = 480;
+        return true;
+    };
+    const photos::FolderScan scan = photos::scanPhotoFolder(tree.top(), nullptr, {}, fakeDecode);
+
+    CHECK_EQ(scan.photos.size(), 2u);
+    CHECK_EQ(scan.undecodable, 1u);
+    for (const auto& photo : scan.photos) {
+        CHECK(photo.id.find("photoslibrary") == std::string::npos);
+        CHECK_EQ(photo.pixelWidth, 640);
+        CHECK_EQ(photo.sizeBytes, 1u);
+        CHECK(photo.hash == photos::dHash(makeImage(64, 64, rampPixel)));
+    }
+    CHECK(photos::isPhotoExtension("x.HEIC"));
+    CHECK(!photos::isPhotoExtension("x.txt"));
+}
+
 int main() {
     testHumanReadableBytes();
 
@@ -958,6 +987,7 @@ int main() {
     testSharpnessBlurLower();
     testGroupKeeperOrder();
     testGroupTransitive();
+    testScanPhotoFolderUsesDecoder();
     testGroupNoPairs();
 
     testClassifyProcess();

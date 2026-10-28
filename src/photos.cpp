@@ -1,8 +1,13 @@
 #include "maccleaner/photos.hpp"
 
+#include "maccleaner/safety.hpp"
+#include "maccleaner/walk.hpp"
+
 #include <algorithm>
 #include <bit>
+#include <cctype>
 #include <map>
+#include <set>
 #include <numeric>
 #include <tuple>
 
@@ -118,6 +123,56 @@ std::vector<std::vector<std::size_t>> groupDuplicates(const std::vector<PhotoInf
     std::sort(groups.begin(), groups.end(),
               [&](const auto& a, const auto& b) { return photos[a[0]].id < photos[b[0]].id; });
     return groups;
+}
+
+bool isPhotoExtension(const std::filesystem::path& path) {
+    static const std::set<std::string> kExtensions = {
+        ".jpg", ".jpeg", ".heic", ".heif", ".png", ".tif", ".tiff", ".webp",
+        ".dng", ".cr2", ".cr3", ".nef", ".arw", ".raf", ".orf", ".rw2",
+    };
+    std::string extension = path.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return kExtensions.count(extension) != 0;
+}
+
+FolderScan scanPhotoFolder(const std::filesystem::path& root,
+                           const std::atomic<bool>* cancelled,
+                           const PhotoProgress& progress,
+                           const DecodeFn& decode) {
+    FolderScan scan;
+    std::uint64_t done = 0;
+    walkFiles(
+        root,
+        [&](const std::filesystem::path& path, const struct stat& st) {
+            if (!isPhotoExtension(path)) {
+                return;
+            }
+            Decoded decoded;
+            if (!decode(path, decoded)) {
+                ++scan.undecodable;
+                return;
+            }
+            PhotoInfo info;
+            info.id = path.string();
+            info.hash = dHash(decoded.gray);
+            info.sharpness = sharpness(decoded.gray);
+            info.pixelWidth = decoded.pixelWidth;
+            info.pixelHeight = decoded.pixelHeight;
+            info.createdUnix = decoded.createdUnix;
+#ifdef __APPLE__
+            if (info.createdUnix == 0) {
+                info.createdUnix = st.st_birthtimespec.tv_sec;
+            }
+#endif
+            info.sizeBytes = static_cast<std::uintmax_t>(st.st_size);
+            scan.photos.push_back(std::move(info));
+            if (progress) {
+                progress(++done, path);
+            }
+        },
+        cancelled, {}, [](const std::filesystem::path& dir) { return !safety::isInsidePhotosLibrary(dir); });
+    return scan;
 }
 
 } // namespace maccleaner::photos

@@ -3,6 +3,7 @@
 #import "MCOptimizeSheetController.h"
 #import "MCProcessModel.h"
 #import "MCTheme.h"
+#import "MCToolBanner.h"
 
 #include "maccleaner/format.hpp"
 
@@ -84,6 +85,7 @@ NSString *kindLabel(MCProcessKind kind) {
 @property(nonatomic, strong) NSProgressIndicator *optimizeSpinner;
 @property(nonatomic, strong) NSButton *pauseButton;
 @property(nonatomic, strong) NSTextField *statusLabel;
+@property(nonatomic, strong) MCToolBanner *banner;
 @property(nonatomic, strong) NSTableView *tableView;
 @property(nonatomic, strong) NSButton *quitButton;
 @property(nonatomic, strong) NSButton *forceQuitButton;
@@ -129,16 +131,15 @@ NSString *kindLabel(MCProcessKind kind) {
     self.filterPopUp.target = self;
     self.filterPopUp.action = @selector(filterChanged:);
 
-    self.pauseButton = [NSButton buttonWithTitle:@"Pause" target:self action:@selector(togglePaused:)];
-    self.pauseButton.bezelStyle = NSBezelStyleRounded;
+    self.pauseButton = [MCGlassButton buttonWithTitle:@"Pause" style:MCGlassButtonStylePill tool:MCToolPerformance
+                                               target:self action:@selector(togglePaused:)];
 
     // The headline action of the tool: one click to find what can be
     // reclaimed. It opens a review sheet rather than acting immediately --
     // see MCOptimizeSheetController for why that is not negotiable.
-    self.optimizeButton = [NSButton buttonWithTitle:@"Optimize…" target:self action:@selector(optimize:)];
-    self.optimizeButton.bezelStyle = NSBezelStyleRounded;
+    self.optimizeButton = [MCGlassButton buttonWithTitle:@"Optimize…" style:MCGlassButtonStylePillPrimary
+                                                   tool:MCToolPerformance target:self action:@selector(optimize:)];
     self.optimizeButton.keyEquivalent = @"\r";
-    [MCTheme stylePrimaryButton:self.optimizeButton];
     self.optimizeButton.toolTip = @"Find processes that can be closed safely";
 
     self.optimizeSpinner = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
@@ -151,7 +152,7 @@ NSString *kindLabel(MCProcessKind kind) {
                           forOrientation:NSLayoutConstraintOrientationHorizontal];
 
     NSStackView *topBar = [NSStackView stackViewWithViews:@[
-        self.filterPopUp, self.optimizeButton, self.optimizeSpinner, topSpacer, self.pauseButton
+        self.filterPopUp, topSpacer, self.optimizeSpinner
     ]];
     topBar.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     topBar.spacing = 8;
@@ -227,13 +228,21 @@ NSString *kindLabel(MCProcessKind kind) {
     bottomBar.spacing = 8;
     bottomBar.translatesAutoresizingMaskIntoConstraints = NO;
 
+    self.banner = [[MCToolBanner alloc] initWithTool:MCToolPerformance symbol:@"gauge.with.needle"];
+    self.banner.actions = @[ self.pauseButton, self.optimizeButton ];
+
+    [self.view addSubview:self.banner];
     [self.view addSubview:topBar];
     [self.view addSubview:scrollView];
     [self.view addSubview:bottomBar];
 
     const CGFloat margin = 16;
     [NSLayoutConstraint activateConstraints:@[
-        [topBar.topAnchor constraintEqualToAnchor:self.view.topAnchor constant:margin],
+        [self.banner.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor constant:8],
+        [self.banner.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:margin],
+        [self.banner.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-margin],
+
+        [topBar.topAnchor constraintEqualToAnchor:self.banner.bottomAnchor constant:12],
         [topBar.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:margin],
         [topBar.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-margin],
 
@@ -374,6 +383,10 @@ NSString *kindLabel(MCProcessKind kind) {
                                         (unsigned long)self.allItems.count, (unsigned long)heavyCount,
                                         self.paused ? @" · paused" : @""];
     }
+    self.banner.value = [NSString stringWithFormat:@"%lu heavy", (unsigned long)heavyCount];
+    self.banner.caption = [NSString stringWithFormat:@"of %lu processes · over %.0f%% CPU or %llu GB memory%@",
+                                                     (unsigned long)self.allItems.count, kHeavyCpuPercent,
+                                                     kHeavyMemoryBytes >> 30, self.paused ? @" · paused" : @""];
     [self updateActionButtons];
 }
 

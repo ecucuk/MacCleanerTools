@@ -68,19 +68,16 @@ private func humanBytes(_ bytes: UInt64) -> String {
     return unit == 0 ? "\(Int(value)) \(units[unit])" : String(format: "%.1f %@", value, units[unit])
 }
 
-/// The brand gradient's two ends: the same values as MCTheme on the ObjC
-/// side, which this Swift library cannot import. Lighter in dark mode.
+/// The Storage Cleaner's gradient: the same values as MCTheme on the ObjC
+/// side, which this Swift library cannot import.
 private enum Brand {
-    static let blue = dynamic(light: 0x1c5ced, dark: 0x3d7bff)
-    static let teal = dynamic(light: 0x21b5de, dark: 0x3cc8ee)
-    static let gradient = LinearGradient(colors: [blue, teal], startPoint: .leading, endPoint: .trailing)
+    static let violet = rgb(0x6d28d9)
+    static let blue = rgb(0x2563eb)
+    static let gradient = LinearGradient(colors: [violet, blue], startPoint: .leading, endPoint: .trailing)
 
-    private static func dynamic(light: UInt32, dark: UInt32) -> Color {
-        Color(nsColor: NSColor(name: nil) { appearance in
-            let rgb = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
-            return NSColor(srgbRed: CGFloat((rgb >> 16) & 0xff) / 255, green: CGFloat((rgb >> 8) & 0xff) / 255,
-                           blue: CGFloat(rgb & 0xff) / 255, alpha: 1)
-        })
+    private static func rgb(_ hex: UInt32) -> Color {
+        Color(.sRGB, red: Double((hex >> 16) & 0xff) / 255, green: Double((hex >> 8) & 0xff) / 255,
+              blue: Double(hex & 0xff) / 255)
     }
 }
 
@@ -298,7 +295,7 @@ public final class MCActivityBridge: NSObject {
             return
         }
 
-        let hosting = NSHostingController(rootView: ActivityRootView(state: state).tint(Brand.blue))
+        let hosting = NSHostingController(rootView: ActivityRootView(state: state).tint(Brand.violet))
         let window = NSWindow(contentViewController: hosting)
         window.title = "Activity"
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]

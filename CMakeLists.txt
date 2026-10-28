@@ -144,10 +144,6 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
     # Generated from tools/make_icon.m by tools/build_icon.sh and committed,
     # so building the app never needs to run the generator.
     set(MACCLEANER_ICON "${CMAKE_CURRENT_SOURCE_DIR}/resources/MacCleaner.icns")
-    # Same for the empty-state art and the scan animation (tools/build_art.sh).
-    file(GLOB MACCLEANER_ART CONFIGURE_DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/resources/art/*.png"
-        "${CMAKE_CURRENT_SOURCE_DIR}/resources/art/*.mov")
 
     add_executable(MacCleaner MACOSX_BUNDLE
         src/gui/main.mm
@@ -163,15 +159,15 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
         src/gui/MCOptimizeSheetController.mm
         src/gui/MCUsageSummaryView.mm
         src/gui/MCTheme.mm
-        src/gui/MCEmptyStateView.mm
+        src/gui/MCHeroView.mm
+        src/gui/MCToolBanner.mm
         "${MACCLEANER_VIZ_HEADER_STAGED}"
         "${MACCLEANER_ICON}"
-        ${MACCLEANER_ART}
     )
     # Listing the .icns as a source with a Resources package location is how
     # CMake copies it into MacCleaner.app/Contents/Resources; the plist key
     # below tells Finder and the Dock to use it.
-    set_source_files_properties("${MACCLEANER_ICON}" ${MACCLEANER_ART} PROPERTIES
+    set_source_files_properties("${MACCLEANER_ICON}" PROPERTIES
         MACOSX_PACKAGE_LOCATION Resources)
     target_link_libraries(MacCleaner PRIVATE maccleaner_core maccleaner_viz maccleaner_warnings)
     target_include_directories(MacCleaner PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/viz-header")
@@ -198,11 +194,11 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
     find_library(UTTYPE_FRAMEWORK UniformTypeIdentifiers REQUIRED)
     # Photos supplies PhotoKit (the Photo Cleaner's library source).
     find_library(PHOTOS_FRAMEWORK Photos REQUIRED)
-    # AVFoundation plays the scan animation.
-    find_library(AVFOUNDATION_FRAMEWORK AVFoundation REQUIRED)
+    # QuartzCore draws the hero gradients and the scan ring.
+    find_library(QUARTZCORE_FRAMEWORK QuartzCore REQUIRED)
     target_link_libraries(MacCleaner PRIVATE
         ${COCOA_FRAMEWORK} ${QUARTZ_FRAMEWORK} ${UTTYPE_FRAMEWORK}
-        ${PHOTOS_FRAMEWORK} ${IMAGEIO_FRAMEWORK} ${AVFOUNDATION_FRAMEWORK})
+        ${PHOTOS_FRAMEWORK} ${IMAGEIO_FRAMEWORK} ${QUARTZCORE_FRAMEWORK})
 
     target_compile_options(MacCleaner PRIVATE -fobjc-arc)
 

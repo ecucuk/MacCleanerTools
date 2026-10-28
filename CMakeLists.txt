@@ -145,6 +145,7 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
         src/gui/MCScanModel.mm
         src/gui/MCBigFilesModel.mm
         src/gui/MCProcessModel.mm
+        src/gui/MCPhotoModel.mm
         src/gui/MCMainWindowController.mm
         src/gui/MCCleanerViewController.mm
         src/gui/MCLargeFilesViewController.mm
@@ -175,8 +176,11 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
     # UniformTypeIdentifiers supplies the UTType media gate in front of it.
     find_library(QUARTZ_FRAMEWORK Quartz REQUIRED)
     find_library(UTTYPE_FRAMEWORK UniformTypeIdentifiers REQUIRED)
+    # Photos supplies PhotoKit (the Photo Cleaner's library source).
+    find_library(PHOTOS_FRAMEWORK Photos REQUIRED)
     target_link_libraries(MacCleaner PRIVATE
-        ${COCOA_FRAMEWORK} ${QUARTZ_FRAMEWORK} ${UTTYPE_FRAMEWORK})
+        ${COCOA_FRAMEWORK} ${QUARTZ_FRAMEWORK} ${UTTYPE_FRAMEWORK}
+        ${PHOTOS_FRAMEWORK} ${IMAGEIO_FRAMEWORK})
 
     target_compile_options(MacCleaner PRIVATE -fobjc-arc)
 

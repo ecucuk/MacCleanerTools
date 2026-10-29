@@ -81,4 +81,22 @@ using ApplyProgress = std::function<void(std::size_t done, std::size_t total)>;
 ApplyResult applyPlan(const std::vector<Move>& moves, const std::filesystem::path& source,
                       const std::atomic<bool>* cancelled = nullptr, const ApplyProgress& progress = {});
 
+// Fills `date` (and `category`) of a photo, and `date` of a video, from the
+// file's own metadata; other kinds and unreadable files are left as they
+// are. Photos: EXIF DateTimeOriginal (else TIFF DateTime) and Vision on a
+// 512 px thumbnail. Videos: AVFoundation creationDate. Platform code.
+void readMetadata(FileMeta& meta);
+
+using MetadataFn = std::function<void(FileMeta& meta)>;
+using ScanProgress = std::function<void(std::size_t filesSeen)>;
+
+// Every file under `source` that the organizer would place, with `read`
+// applied and a missing date replaced by the file's birth time. Skips
+// hidden files and folders, app bundles, Photos libraries, and the
+// Photos/ Videos/ Music/ Documents/ Other/ folders directly under `dest`
+// (already organized when `dest` is inside `source`).
+std::vector<FileMeta> scanForOrganize(const std::filesystem::path& source, const std::filesystem::path& dest,
+                                      const std::atomic<bool>* cancelled = nullptr, const ScanProgress& progress = {},
+                                      const MetadataFn& read = readMetadata);
+
 } // namespace maccleaner::organizer

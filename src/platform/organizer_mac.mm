@@ -1,13 +1,17 @@
-// macOS side of the File Organizer: moving files (and, later, reading
-// their metadata). Compiled with -fobjc-arc (see CMakeLists.txt).
+// macOS side of the File Organizer: moving files and reading photo and
+// video metadata. Compiled with -fobjc-arc (see CMakeLists.txt).
 
 #include "maccleaner/organizer.hpp"
 
+#import <AVFoundation/AVFoundation.h>
 #import <Foundation/Foundation.h>
+#import <ImageIO/ImageIO.h>
+#import <Vision/Vision.h>
 
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 
 namespace maccleaner::organizer {
 
@@ -46,6 +50,96 @@ bool moveFile(const std::filesystem::path& from, const std::filesystem::path& to
             return fail(nsError != nil ? nsError.localizedDescription.UTF8String : "move failed");
         }
         return true;
+    }
+}
+
+namespace {
+
+// EXIF/TIFF "YYYY:MM:DD HH:MM:SS", camera local time.
+std::optional<std::time_t> parseExifDate(NSString* text) {
+    std::tm tm{};
+    if (text == nil || strptime(text.UTF8String, "%Y:%m:%d %H:%M:%S", &tm) == nullptr) {
+        return std::nullopt;
+    }
+    tm.tm_isdst = -1;
+    const std::time_t time = std::mktime(&tm);
+    return time == -1 ? std::nullopt : std::optional<std::time_t>(time);
+}
+
+void readPhoto(FileMeta& meta, NSURL* url) {
+    CGImageSourceRef source = CGImageSourceCreateWithURL((__bridge CFURLRef)url, nullptr);
+    if (source == nullptr) {
+        return;
+    }
+    NSDictionary* properties = CFBridgingRelease(CGImageSourceCopyPropertiesAtIndex(source, 0, nullptr));
+    NSDictionary* exif = properties[(__bridge NSString*)kCGImagePropertyExifDictionary];
+    NSDictionary* tiff = properties[(__bridge NSString*)kCGImagePropertyTIFFDictionary];
+    meta.date = parseExifDate(exif[(__bridge NSString*)kCGImagePropertyExifDateTimeOriginal]);
+    if (!meta.date) {
+        meta.date = parseExifDate(tiff[(__bridge NSString*)kCGImagePropertyTIFFDateTime]);
+    }
+
+    NSDictionary* options = @{
+        (__bridge NSString*)kCGImageSourceCreateThumbnailFromImageAlways : @YES,
+        (__bridge NSString*)kCGImageSourceCreateThumbnailWithTransform : @YES,
+        (__bridge NSString*)kCGImageSourceThumbnailMaxPixelSize : @512,
+    };
+    CGImageRef thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, (__bridge CFDictionaryRef)options);
+    CFRelease(source);
+    if (thumbnail == nullptr) {
+        return;
+    }
+    VNClassifyImageRequest* request = [[VNClassifyImageRequest alloc] init];
+    VNImageRequestHandler* handler = [[VNImageRequestHandler alloc] initWithCGImage:thumbnail options:@{}];
+    std::vector<Label> labels;
+    if ([handler performRequests:@[ request ] error:nil]) {
+        // ~1300 results per image, nearly all near 0; only strong ones matter.
+        for (VNClassificationObservation* observation in request.results) {
+            if (observation.confidence >= kMinLabelConfidence) {
+                labels.push_back({observation.identifier.UTF8String, observation.confidence});
+            }
+        }
+    }
+    CGImageRelease(thumbnail);
+    meta.category = categoryFromLabels(labels);
+}
+
+void readVideo(FileMeta& meta, NSURL* url) {
+    AVURLAsset* asset = [AVURLAsset URLAssetWithURL:url options:nil];
+    dispatch_semaphore_t loaded = dispatch_semaphore_create(0);
+    [asset loadValuesAsynchronouslyForKeys:@[ @"creationDate" ]
+                         completionHandler:^{
+                           dispatch_semaphore_signal(loaded);
+                         }];
+    dispatch_semaphore_wait(loaded, DISPATCH_TIME_FOREVER);
+    if ([asset statusOfValueForKey:@"creationDate" error:nil] != AVKeyValueStatusLoaded) {
+        return;
+    }
+    // KVC: the property getter is deprecated, but the key is loaded above.
+    AVMetadataItem* item = [asset valueForKey:@"creationDate"];
+    NSDate* date = item.dateValue;
+    if (date != nil) {
+        meta.date = static_cast<std::time_t>(date.timeIntervalSince1970);
+    }
+}
+
+} // namespace
+
+void readMetadata(FileMeta& meta) {
+    if (meta.kind != Kind::Photos && meta.kind != Kind::Videos) {
+        return;
+    }
+    @autoreleasepool {
+        NSString* path = [NSString stringWithUTF8String:meta.path.c_str()];
+        if (path == nil) {
+            return;
+        }
+        NSURL* url = [NSURL fileURLWithPath:path];
+        if (meta.kind == Kind::Photos) {
+            readPhoto(meta, url);
+        } else {
+            readVideo(meta, url);
+        }
     }
 }
 

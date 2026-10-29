@@ -88,8 +88,11 @@ if(APPLE)
     find_library(IMAGEIO_FRAMEWORK ImageIO REQUIRED)
     find_library(COREGRAPHICS_FRAMEWORK CoreGraphics REQUIRED)
     find_library(IOKIT_FRAMEWORK IOKit REQUIRED)
+    find_library(AVFOUNDATION_FRAMEWORK AVFoundation REQUIRED)
+    find_library(VISION_FRAMEWORK Vision REQUIRED)
     target_link_libraries(maccleaner_core PRIVATE
-        ${FOUNDATION_FRAMEWORK} ${IMAGEIO_FRAMEWORK} ${COREGRAPHICS_FRAMEWORK} ${IOKIT_FRAMEWORK})
+        ${FOUNDATION_FRAMEWORK} ${IMAGEIO_FRAMEWORK} ${COREGRAPHICS_FRAMEWORK} ${IOKIT_FRAMEWORK}
+        ${AVFOUNDATION_FRAMEWORK} ${VISION_FRAMEWORK})
     set_source_files_properties(src/platform/image_mac.mm src/platform/organizer_mac.mm PROPERTIES
         COMPILE_FLAGS "-fobjc-arc"
     )

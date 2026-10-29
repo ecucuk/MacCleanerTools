@@ -1,6 +1,7 @@
 #include "maccleaner/organizer.hpp"
 
 #include "maccleaner/safety.hpp"
+#include "maccleaner/walk.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -189,6 +190,51 @@ ApplyResult applyPlan(const std::vector<Move>& moves, const fs::path& source, co
         }
     }
     return result;
+}
+
+std::vector<FileMeta> scanForOrganize(const fs::path& source, const fs::path& dest, const std::atomic<bool>* cancelled,
+                                      const ScanProgress& progress, const MetadataFn& read) {
+    std::error_code ec;
+    const fs::path root = fs::weakly_canonical(source, ec);
+    const fs::path destination = fs::weakly_canonical(dest, ec);
+    const auto isKindFolder = [](const std::string& name) {
+        for (Kind kind : {Kind::Photos, Kind::Videos, Kind::Music, Kind::Documents, Kind::Other}) {
+            if (name == kindName(kind)) {
+                return true;
+            }
+        }
+        return false;
+    };
+    const auto enterDir = [&](const fs::path& dir) {
+        const std::string name = dir.filename().string();
+        const bool isBundle = dir.extension() == ".app";
+        return !(name.empty() || name.front() == '.' || isBundle || safety::isInsidePhotosLibrary(dir) ||
+                 (dir.parent_path() == destination && isKindFolder(name)));
+    };
+    std::vector<FileMeta> files;
+    walkFiles(
+        root,
+        [&](const fs::path& path, const struct stat& st) {
+            const std::string name = path.filename().string();
+            if (name.empty() || name.front() == '.') {
+                return;
+            }
+            FileMeta meta{path, kindFromPath(path), std::nullopt, PhotoCategory::Other};
+            read(meta);
+            if (!meta.date) {
+#ifdef __APPLE__
+                meta.date = st.st_birthtimespec.tv_sec;
+#else
+                meta.date = st.st_mtime;
+#endif
+            }
+            files.push_back(std::move(meta));
+            if (progress) {
+                progress(files.size());
+            }
+        },
+        cancelled, {}, enterDir);
+    return files;
 }
 
 } // namespace maccleaner::organizer

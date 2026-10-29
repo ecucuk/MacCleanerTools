@@ -1653,6 +1653,63 @@ void testIsValidDestination() {
     CHECK(organizer::isValidDestination(homeDir / "Org", &reason));
 }
 
+namespace {
+const organizer::MetadataFn kNoMetadata = [](organizer::FileMeta&) {};
+
+std::vector<std::string> relativePaths(const std::vector<organizer::FileMeta>& files, const fs::path& root) {
+    std::vector<std::string> out;
+    for (const auto& file : files) {
+        out.push_back(file.path.lexically_relative(root).string());
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+} // namespace
+
+void testScanFillsBirthTime() {
+    ScratchTree tree;
+    const auto files = organizer::scanForOrganize(tree.root(), tree.root(), nullptr, {}, kNoMetadata);
+    CHECK_EQ(files.size(), std::size_t{1});
+    if (files.size() == 1) {
+        struct stat st {};
+        CHECK(::stat((tree.root() / "child_file.txt").c_str(), &st) == 0);
+        CHECK(files[0].kind == organizer::Kind::Documents);
+        CHECK(files[0].date.has_value());
+#ifdef __APPLE__
+        CHECK(files[0].date == st.st_birthtimespec.tv_sec);
+#endif
+    }
+}
+
+void testScanSkipsOrganizedFolders() {
+    ScratchTree tree;
+    const fs::path root = tree.root();
+    fs::remove(root / "child_file.txt");
+    for (const char* name : {"Photos/x.jpg", ".hidden/y.jpg", ".z.jpg", "A.app/c.jpg", "L.photoslibrary/d.jpg",
+                             "sub/e.jpg", "sub/Photos/f.jpg"}) {
+        writeFileOfSize(root / name, 1);
+    }
+    const auto files = organizer::scanForOrganize(root, root, nullptr, {}, kNoMetadata);
+    // Only kind folders directly under the destination are skipped.
+    CHECK(relativePaths(files, root) == (std::vector<std::string>{"sub/Photos/f.jpg", "sub/e.jpg"}));
+}
+
+void testOrganizeTwiceMovesNothing() {
+    ScratchTree tree;
+    const fs::path root = tree.root();
+    writeFileOfSize(root / "a/IMG_1.jpg", 1);
+    writeFileOfSize(root / "b/IMG_1.jpg", 1);
+    writeFileOfSize(root / "song.mp3", 1);
+    const auto exists = [](const fs::path& p) { return fs::exists(p); };
+    const auto first = organizer::planOrganize(organizer::scanForOrganize(root, root, nullptr, {}, kNoMetadata), root, exists);
+    CHECK_EQ(first.size(), std::size_t{4});
+    const auto applied = organizer::applyPlan(first, root);
+    CHECK_EQ(applied.moved, std::size_t{4});
+    CHECK(applied.problems.empty());
+    const auto second = organizer::planOrganize(organizer::scanForOrganize(root, root, nullptr, {}, kNoMetadata), root, exists);
+    CHECK(second.empty());
+}
+
 int main() {
     testHumanReadableBytes();
 
@@ -1748,6 +1805,9 @@ int main() {
     testApplyNeverOverwrites();
     testApplyReportsMissingSource();
     testIsValidDestination();
+    testScanFillsBirthTime();
+    testScanSkipsOrganizedFolders();
+    testOrganizeTwiceMovesNothing();
 
     if (g_failures == 0) {
         std::cout << "All tests passed.\n";

@@ -24,4 +24,6 @@ bool moveFile(const std::filesystem::path& from, const std::filesystem::path& to
     return !ec;
 }
 
+void readMetadata(FileMeta&) {}
+
 } // namespace maccleaner::organizer

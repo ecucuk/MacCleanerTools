@@ -145,6 +145,7 @@ GeocodeStatus reverseGeocode(GeoPoint point, Place& place) {
         }
         __block GeocodeStatus status = GeocodeStatus::Failed;
         __block NSString* country = nil;
+        __block NSString* province = nil;
         __block NSString* city = nil;
         __block bool done = false;
         dispatch_semaphore_t finished = dispatch_semaphore_create(0);
@@ -153,7 +154,14 @@ GeocodeStatus reverseGeocode(GeoPoint point, Place& place) {
           MKAddressRepresentations* address = items.firstObject.addressRepresentations;
           if (address != nil) {
               country = address.regionName;
-              city = address.cityName;
+              // Over water Apple names the country as the city.
+              city = [address.cityName isEqual:address.regionName] ? nil : address.cityName;
+              // MKAddressRepresentations has no state / il field; cityName is the
+              // district in Turkey (Kartal, not İstanbul).
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+              province = items.firstObject.placemark.administrativeArea;
+#pragma clang diagnostic pop
               status = country.length > 0 ? GeocodeStatus::Found : GeocodeStatus::NotFound;
           } else if ([error.domain isEqual:MKErrorDomain] && error.code == MKErrorLoadingThrottled) {
               status = GeocodeStatus::Throttled;
@@ -171,6 +179,7 @@ GeocodeStatus reverseGeocode(GeoPoint point, Place& place) {
             dispatch_semaphore_wait(finished, DISPATCH_TIME_FOREVER);
         }
         place.country = country != nil ? country.UTF8String : "";
+        place.province = province != nil ? province.UTF8String : "";
         place.city = city != nil ? city.UTF8String : "";
         return status;
     }

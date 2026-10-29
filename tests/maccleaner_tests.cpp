@@ -1735,17 +1735,19 @@ void testPlanPlaceLayout() {
     auto istanbul = meta("/s/a.jpg");
     istanbul.location = organizer::GeoPoint{41.0, 29.0};
     istanbul.country = "Turkey";
-    istanbul.city = "Istanbul";
+    istanbul.province = "Istanbul";
+    istanbul.city = "Kartal";
     auto noCity = meta("/s/c.jpg");
     noCity.location = organizer::GeoPoint{39.0, 35.0};
     noCity.country = "Turkey";
+    noCity.province = "Ankara";
     const auto moves = organizer::planOrganize({istanbul, meta("/s/b.jpg"), noCity, meta("/s/v.mp4")}, "/d",
                                                kNothingExists, organizer::PhotoLayout::Place);
     CHECK_EQ(moves.size(), std::size_t{4});
     if (moves.size() == 4) {
-        CHECK_EQ(moves[0].to.string(), std::string("/d/Photos/Turkey/Istanbul/2023/2023-07/a.jpg"));
+        CHECK_EQ(moves[0].to.string(), std::string("/d/Photos/Turkey/Istanbul/Kartal/2023/2023-07/a.jpg"));
         CHECK_EQ(moves[1].to.string(), std::string("/d/Photos/Unknown Place/2023/2023-07/b.jpg"));
-        CHECK_EQ(moves[2].to.string(), std::string("/d/Photos/Turkey/Unknown City/2023/2023-07/c.jpg"));
+        CHECK_EQ(moves[2].to.string(), std::string("/d/Photos/Turkey/Ankara/Unknown City/2023/2023-07/c.jpg"));
         CHECK_EQ(moves[3].to.string(), std::string("/d/Videos/2023/2023-07/v.mp4"));
     }
 }
@@ -1767,7 +1769,7 @@ struct FakeGeocoder {
             const auto status = calls < script.size() ? script[calls] : organizer::GeocodeStatus::Found;
             ++calls;
             if (status == organizer::GeocodeStatus::Found) {
-                place = {"Turkey", "Istanbul"};
+                place = {"Turkey", "Istanbul", "Kartal"};
             }
             return status;
         };
@@ -1786,7 +1788,8 @@ void testResolvePlacesGroupsCells() {
     FakeGeocoder fake;
     organizer::resolvePlaces(files, tree.root() / "geo.tsv", nullptr, {}, fake.geocode(), fake.sleep());
     CHECK_EQ(fake.calls, std::size_t{2});
-    CHECK_EQ(files[0].city, std::string("Istanbul"));
+    CHECK_EQ(files[0].province, std::string("Istanbul"));
+    CHECK_EQ(files[0].city, std::string("Kartal"));
     CHECK_EQ(files[2].country, std::string("Turkey"));
     CHECK(files[3].country.empty());
 }
@@ -1800,7 +1803,7 @@ void testResolvePlacesUsesCache() {
     FakeGeocoder second;
     organizer::resolvePlaces(again, tree.root() / "geo.tsv", nullptr, {}, second.geocode(), second.sleep());
     CHECK_EQ(second.calls, std::size_t{0});
-    CHECK_EQ(again[0].city, std::string("Istanbul"));
+    CHECK_EQ(again[0].city, std::string("Kartal"));
 }
 
 void testResolvePlacesRetriesThrottled() {
@@ -1811,7 +1814,7 @@ void testResolvePlacesRetriesThrottled() {
     organizer::resolvePlaces(files, tree.root() / "geo.tsv", nullptr, {}, fake.geocode(), fake.sleep());
     CHECK_EQ(fake.calls, std::size_t{2});
     CHECK(std::find(fake.sleeps.begin(), fake.sleeps.end(), 60000) != fake.sleeps.end());
-    CHECK_EQ(files[0].city, std::string("Istanbul"));
+    CHECK_EQ(files[0].city, std::string("Kartal"));
 }
 
 void testResolvePlacesSkipsFailedInCache() {
@@ -1825,6 +1828,28 @@ void testResolvePlacesSkipsFailedInCache() {
     organizer::resolvePlaces(files, tree.root() / "geo.tsv", nullptr, {}, again.geocode(), again.sleep());
     // The failed cell is asked again; the NotFound cell is cached.
     CHECK_EQ(again.calls, std::size_t{1});
+}
+
+void testCliParsesOrganize() {
+    CliParseError error;
+    const char* argv[] = {"mac_cleaner", "organize", "--under=/a", "--dest=/b", "--by=place", "--apply", "--yes"};
+    const auto options = parseArgs(7, const_cast<char**>(argv), error);
+    CHECK(options.has_value());
+    CHECK(options->command == Command::Organize);
+    CHECK(options->under == "/a");
+    CHECK(options->dest == "/b");
+    CHECK(options->photoLayout == organizer::PhotoLayout::Place);
+    CHECK(options->apply);
+
+    const char* plain[] = {"mac_cleaner", "organize", "--under=/a"};
+    const auto defaults = parseArgs(3, const_cast<char**>(plain), error);
+    CHECK(defaults.has_value() && defaults->photoLayout == organizer::PhotoLayout::Content && !defaults->apply);
+
+    // Organizing the whole home folder by default would be a disaster.
+    const char* noFolder[] = {"mac_cleaner", "organize"};
+    CHECK(!parseArgs(2, const_cast<char**>(noFolder), error).has_value());
+    const char* badLayout[] = {"mac_cleaner", "organize", "--under=/a", "--by=size"};
+    CHECK(!parseArgs(4, const_cast<char**>(badLayout), error).has_value());
 }
 
 int main() {
@@ -1932,6 +1957,7 @@ int main() {
     testResolvePlacesUsesCache();
     testResolvePlacesRetriesThrottled();
     testResolvePlacesSkipsFailedInCache();
+    testCliParsesOrganize();
 
     if (g_failures == 0) {
         std::cout << "All tests passed.\n";

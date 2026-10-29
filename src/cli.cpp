@@ -63,6 +63,7 @@ void printUsage() {
         "  mac_cleaner processes [--sort=cpu|mem] [--top=<n>]\n"
         "  mac_cleaner photos [--under=<path>] [--distance=<n>] [--blur=<t>]\n"
         "  mac_cleaner optimize [--apply]\n"
+        "  mac_cleaner organize --under=<path> [--dest=<path>] [--by=content|place] [--apply] [--yes]\n"
         "\n"
         "Commands:\n"
         "  scan       Report what would be cleaned and how much space it would free (default).\n"
@@ -74,6 +75,8 @@ void printUsage() {
         "             Report only; remove photos from the app.\n"
         "  optimize   Find reclaimable processes (orphaned helpers, zombies, update\n"
         "             agents). Reports only; pass --apply to terminate them.\n"
+        "  organize   Sort a folder into Photos/<Category or Place>/YYYY/YYYY-MM, Videos/YYYY/YYYY-MM,\n"
+        "             Music, Documents and Other. A dry run unless --apply; never overwrites.\n"
         "\n"
         "Options (scan/clean):\n"
         "  --only=<categories>  Comma-separated subset, e.g. --only=caches,derived-data\n"
@@ -98,6 +101,14 @@ void printUsage() {
         "  --distance=<n>        Max hash difference for duplicates, 0-64 (default: 6).\n"
         "  --blur=<t>            Sharpness below which a photo is blurry (default: 100).\n"
         "\n"
+        "Options (organize):\n"
+        "  --under=<path>        Folder to organize (required).\n"
+        "  --dest=<path>         Where the kind folders go (default: the --under folder).\n"
+        "  --by=content|place    Group photos by Vision category or by country/city\n"
+        "                        (place sends grid-cell coordinates to Apple; default: content).\n"
+        "  --apply               Actually move the files.\n"
+        "  --yes                 Skip the confirmation prompt.\n"
+        "\n"
         "  --help                 Show this message.\n";
 }
 
@@ -108,12 +119,14 @@ std::optional<CliOptions> parseArgs(int argc, char** argv, CliParseError& error)
 
     std::size_t index = 0;
     if (!args.empty() && (args[0] == "scan" || args[0] == "clean" || args[0] == "bigfiles" ||
-                          args[0] == "processes" || args[0] == "optimize" || args[0] == "photos")) {
+                          args[0] == "processes" || args[0] == "optimize" || args[0] == "photos" ||
+                          args[0] == "organize")) {
         options.command = (args[0] == "scan")       ? Command::Scan
                           : (args[0] == "clean")     ? Command::Clean
                           : (args[0] == "bigfiles")  ? Command::BigFiles
                           : (args[0] == "processes") ? Command::Processes
                           : (args[0] == "photos")    ? Command::Photos
+                          : (args[0] == "organize")  ? Command::Organize
                                                       : Command::Optimize;
         index = 1;
     }
@@ -186,10 +199,19 @@ std::optional<CliOptions> parseArgs(int argc, char** argv, CliParseError& error)
                 return std::nullopt;
             }
             options.blurThreshold = parsed;
+        } else if (arg.rfind("--dest=", 0) == 0) {
+            options.dest = std::string(arg.substr(std::string_view("--dest=").size()));
+        } else if (arg == "--by=content" || arg == "--by=place") {
+            options.photoLayout = arg == "--by=place" ? organizer::PhotoLayout::Place : organizer::PhotoLayout::Content;
         } else {
             error.message = "unrecognized argument: " + std::string(arg);
             return std::nullopt;
         }
+    }
+
+    if (options.command == Command::Organize && options.under.empty()) {
+        error.message = "organize needs --under=<folder>";
+        return std::nullopt;
     }
 
     if (options.permanent && !options.apply) {

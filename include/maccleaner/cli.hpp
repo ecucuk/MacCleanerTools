@@ -1,5 +1,6 @@
 #pragma once
 
+#include "maccleaner/organizer.hpp"
 #include "maccleaner/photos.hpp"
 #include "maccleaner/types.hpp"
 
@@ -16,6 +17,7 @@ enum class Command {
     Processes,  // list the current user's processes by CPU/memory
     Photos,     // report duplicate and blurry photos under a root
     Optimize,   // find (and with --apply, terminate) reclaimable processes
+    Organize,   // sort a folder into Photos/Videos/Music/Documents/Other (--apply moves)
     Help,
 };
 
@@ -38,6 +40,10 @@ struct CliOptions {
     // photos options (`under` is shared with bigfiles).
     int distance = photos::kDefaultMaxDistance;
     double blurThreshold = photos::kDefaultBlurThreshold;
+
+    // organize options (`under` is the required source folder).
+    std::string dest; // empty = the source folder itself
+    organizer::PhotoLayout photoLayout = organizer::PhotoLayout::Content;
 };
 
 struct CliParseError {

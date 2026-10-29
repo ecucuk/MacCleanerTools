@@ -137,7 +137,9 @@ std::optional<fs::path> targetFolder(const FileMeta& file, const fs::path& dest,
         folder /= categoryName(file.category);
     } else if (file.kind == Kind::Photos) {
         const std::string country = folderName(file.country, "");
-        folder = country.empty() ? folder / "Unknown Place" : folder / country / folderName(file.city, "Unknown City");
+        folder = country.empty() ? folder / "Unknown Place"
+                                 : folder / country / folderName(file.province, "Unknown Province") /
+                                       folderName(file.city, "Unknown City");
     }
     if (file.kind == Kind::Photos || file.kind == Kind::Videos) {
         if (!file.date) {
@@ -292,7 +294,7 @@ void resolvePlaces(std::vector<FileMeta>& files, const fs::path& cacheFile, cons
             std::string lat, lon;
             Place place;
             if (std::getline(fields, lat, '\t') && std::getline(fields, lon, '\t') &&
-                std::getline(fields, place.country, '\t')) {
+                std::getline(fields, place.country, '\t') && std::getline(fields, place.province, '\t')) {
                 std::getline(fields, place.city); // empty for a NotFound cell
                 try {
                     known[{std::stoi(lat), std::stoi(lon)}] = place;
@@ -334,9 +336,10 @@ void resolvePlaces(std::vector<FileMeta>& files, const fs::path& cacheFile, cons
             if (status == GeocodeStatus::NotFound) {
                 place = {};
             }
-            place = {cacheField(place.country), cacheField(place.city)};
+            place = {cacheField(place.country), cacheField(place.province), cacheField(place.city)};
             known[missing[i]] = place;
-            out << missing[i].lat << '\t' << missing[i].lon << '\t' << place.country << '\t' << place.city << '\n';
+            out << missing[i].lat << '\t' << missing[i].lon << '\t' << place.country << '\t' << place.province << '\t'
+                << place.city << '\n';
             out.flush();
         }
         if (progress) {
@@ -349,6 +352,7 @@ void resolvePlaces(std::vector<FileMeta>& files, const fs::path& cacheFile, cons
             const auto found = known.find(cellOf(*file.location));
             if (found != known.end()) {
                 file.country = found->second.country;
+                file.province = found->second.province;
                 file.city = found->second.city;
             }
         }

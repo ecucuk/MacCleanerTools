@@ -152,10 +152,12 @@ sample). The user chose:
 
 - **Photo layout is selectable.** Content (default):
   `Photos/<Category>/YYYY/YYYY-MM`. Place:
-  `Photos/<Country>/<City>/YYYY/YYYY-MM`. A photo with no GPS, or with a
+  `Photos/<Country>/<Province>/<City>/YYYY/YYYY-MM` (user choice after a
+  live test: Apple's `cityName` is the district in Turkey, for example
+  Kartal, so the province (`İstanbul`) is a level above it). A photo with no GPS, or with a
   location that the geocoder cannot name, goes to
-  `Photos/Unknown Place/YYYY/YYYY-MM`. A known country with no city uses
-  `Unknown City`. Videos, music and documents do not change.
+  `Photos/Unknown Place/YYYY/YYYY-MM`. A missing province or city uses
+  `Unknown Province` / `Unknown City`. Videos, music and documents do not change.
 - **Names come from Apple.** `MKReverseGeocodingRequest` (MapKit, macOS
   26+; `CLGeocoder` is deprecated in this SDK) gives `regionName`
   (country) and `cityName`. The build already targets macOS 27
@@ -166,7 +168,7 @@ sample). The user chose:
 - **Rate limit.** One request every 1.2 s. On a throttling error, wait
   60 s and retry the cell once. Other errors give no name for that cell,
   and that result is not cached.
-- **Cache.** Results go to a TSV file (`latCell lonCell country city`)
+- **Cache.** Results go to a TSV file (`latCell lonCell country province city`)
   that the caller chooses. The GUI uses
   `~/Library/Caches/<bundle id>/geocode.tsv`. The CLI uses
   `~/Library/Caches/MacCleaner/geocode.tsv`. A second preview makes no

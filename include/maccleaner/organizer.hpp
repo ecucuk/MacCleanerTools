@@ -50,7 +50,8 @@ struct FileMeta {
     PhotoCategory category = PhotoCategory::Other;
     std::optional<GeoPoint> location; // photos with EXIF GPS
     std::string country;              // from resolvePlaces; empty = unknown
-    std::string city;
+    std::string province;             // state / il
+    std::string city;                 // city / ilce
 };
 
 // How photos are grouped under Photos/.
@@ -82,8 +83,9 @@ using ExistsFn = std::function<bool(const std::filesystem::path& path)>;
 
 // Target of every file under `dest`:
 //   Photos/<Category>/YYYY/YYYY-MM/<name> (Content layout), or
-//   Photos/<Country>/<City>/YYYY/YYYY-MM/<name> (Place layout; no country is
-//   "Unknown Place" with no city level, no city is "Unknown City"),
+//   Photos/<Country>/<Province>/<City>/YYYY/YYYY-MM/<name> (Place layout; no
+//   country is "Unknown Place" with no lower levels, else a missing level is
+//   "Unknown Province" / "Unknown City"),
 //   Videos/YYYY/YYYY-MM/<name>,
 //   Music/<name>, Documents/<name>, Other/<name>  (dates in local time).
 // A file already at its target is left out, so a second run plans nothing.
@@ -134,6 +136,7 @@ std::vector<FileMeta> scanForOrganize(const std::filesystem::path& source, const
 
 struct Place {
     std::string country;
+    std::string province;
     std::string city;
 };
 
@@ -146,9 +149,9 @@ using SleepFn = std::function<void(std::chrono::milliseconds)>;
 // thread too, where it runs the run loop while it waits. Platform code.
 GeocodeStatus reverseGeocode(GeoPoint point, Place& place);
 
-// Fills `country` and `city` of every file with a location. Files are
+// Fills `country`, `province` and `city` of every file with a location. Files are
 // grouped by GeoCell; each cell is looked up once at its center, through
-// the TSV `cacheFile` first ("lat\tlon\tcountry\tcity" per line) and then
+// the TSV `cacheFile` first ("lat\tlon\tcountry\tprovince\tcity" per line) and then
 // `geocode`, one request every 1.2 s. A throttled request waits 60 s and is
 // retried once. Found and NotFound cells are appended to the cache as they
 // arrive (so a cancelled run keeps them); Failed cells are not.

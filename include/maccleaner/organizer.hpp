@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
@@ -56,5 +58,27 @@ using ExistsFn = std::function<bool(const std::filesystem::path& path)>;
 // target and no target `exists`: later files get "name (2).ext", "(3)", ...
 std::vector<Move> planOrganize(const std::vector<FileMeta>& files, const std::filesystem::path& dest,
                                const ExistsFn& exists);
+
+// Moves one file, creating the parent folders of `to`. Never replaces an
+// existing `to`. Platform code: organizer_mac.mm / organizer_fallback.cpp.
+bool moveFile(const std::filesystem::path& from, const std::filesystem::path& to, std::string* error);
+
+// False (with a reason) for an empty destination, one inside a Photos
+// library, or one at or under a hard-denylisted system path.
+bool isValidDestination(const std::filesystem::path& dest, std::string* reason);
+
+struct ApplyResult {
+    std::size_t moved = 0;
+    std::vector<std::string> problems; // "<path>: <reason>"
+};
+
+using ApplyProgress = std::function<void(std::size_t done, std::size_t total)>;
+
+// Runs `moves` in order. A move takes the file away from `source`, so each
+// `from` must pass safety::isSafeToDelete with `source` as the only allowed
+// root. A refused or failed move becomes a problem and the rest go on.
+// `cancelled` is checked before each move.
+ApplyResult applyPlan(const std::vector<Move>& moves, const std::filesystem::path& source,
+                      const std::atomic<bool>* cancelled = nullptr, const ApplyProgress& progress = {});
 
 } // namespace maccleaner::organizer

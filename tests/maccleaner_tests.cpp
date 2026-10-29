@@ -1587,6 +1587,72 @@ void testPlanCollisions() {
     }
 }
 
+namespace {
+std::string readAll(const fs::path& path) {
+    std::ifstream in(path);
+    return std::string(std::istreambuf_iterator<char>(in), {});
+}
+} // namespace
+
+void testApplyMovesFiles() {
+    ScratchTree tree;
+    std::ofstream(tree.root() / "a.jpg") << "a";
+    const fs::path dest = tree.root() / "Photos/Other/2023/2023-07";
+    const auto result = organizer::applyPlan(
+        {{tree.root() / "a.jpg", dest / "a.jpg"}, {tree.root() / "child_file.txt", tree.root() / "Documents/child_file.txt"}},
+        tree.root());
+    CHECK_EQ(result.moved, std::size_t{2});
+    CHECK(result.problems.empty());
+    CHECK(!fs::exists(tree.root() / "a.jpg"));
+    CHECK_EQ(readAll(dest / "a.jpg"), std::string("a"));
+    CHECK(fs::exists(tree.root() / "Documents/child_file.txt"));
+}
+
+void testApplyRefusesOutsideSource() {
+    ScratchTree tree;
+    const auto result =
+        organizer::applyPlan({{tree.outside() / "secret.txt", tree.root() / "Documents/secret.txt"}}, tree.root());
+    CHECK_EQ(result.moved, std::size_t{0});
+    CHECK_EQ(result.problems.size(), std::size_t{1});
+    CHECK(fs::exists(tree.outside() / "secret.txt"));
+    CHECK(!fs::exists(tree.root() / "Documents/secret.txt"));
+}
+
+void testApplyNeverOverwrites() {
+    ScratchTree tree;
+    fs::create_directories(tree.root() / "Documents");
+    std::ofstream(tree.root() / "Documents/child_file.txt") << "keep";
+    const auto result =
+        organizer::applyPlan({{tree.root() / "child_file.txt", tree.root() / "Documents/child_file.txt"}}, tree.root());
+    CHECK_EQ(result.moved, std::size_t{0});
+    CHECK_EQ(result.problems.size(), std::size_t{1});
+    CHECK(fs::exists(tree.root() / "child_file.txt"));
+    CHECK_EQ(readAll(tree.root() / "Documents/child_file.txt"), std::string("keep"));
+}
+
+void testApplyReportsMissingSource() {
+    ScratchTree tree;
+    std::ofstream(tree.root() / "gone.txt") << "x";
+    fs::remove(tree.root() / "gone.txt");
+    const auto result = organizer::applyPlan({{tree.root() / "gone.txt", tree.root() / "Documents/gone.txt"},
+                                              {tree.root() / "child_file.txt", tree.root() / "Documents/child_file.txt"}},
+                                             tree.root());
+    CHECK_EQ(result.moved, std::size_t{1});
+    CHECK_EQ(result.problems.size(), std::size_t{1});
+    CHECK(fs::exists(tree.root() / "Documents/child_file.txt"));
+}
+
+void testIsValidDestination() {
+    const char* home = std::getenv("HOME");
+    const fs::path homeDir = home != nullptr ? home : "/Users/nobody";
+    std::string reason;
+    CHECK(!organizer::isValidDestination("", &reason));
+    CHECK(!organizer::isValidDestination("/System/x", &reason));
+    CHECK(!reason.empty());
+    CHECK(!organizer::isValidDestination(homeDir / "Pictures/P.photoslibrary/x", &reason));
+    CHECK(organizer::isValidDestination(homeDir / "Org", &reason));
+}
+
 int main() {
     testHumanReadableBytes();
 
@@ -1677,6 +1743,11 @@ int main() {
     testPlanOtherKinds();
     testPlanSkipsAlreadyPlaced();
     testPlanCollisions();
+    testApplyMovesFiles();
+    testApplyRefusesOutsideSource();
+    testApplyNeverOverwrites();
+    testApplyReportsMissingSource();
+    testIsValidDestination();
 
     if (g_failures == 0) {
         std::cout << "All tests passed.\n";

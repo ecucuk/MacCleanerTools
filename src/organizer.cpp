@@ -1,5 +1,7 @@
 #include "maccleaner/organizer.hpp"
 
+#include "maccleaner/safety.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <set>
@@ -139,6 +141,54 @@ std::vector<Move> planOrganize(const std::vector<FileMeta>& files, const fs::pat
         moves.push_back({file.path, target});
     }
     return moves;
+}
+
+bool isValidDestination(const fs::path& dest, std::string* reason) {
+    const auto reject = [&](std::string why) {
+        if (reason != nullptr) {
+            *reason = std::move(why);
+        }
+        return false;
+    };
+    if (dest.empty()) {
+        return reject("no destination folder");
+    }
+    if (safety::isInsidePhotosLibrary(dest)) {
+        return reject("destination is inside a Photos library: " + dest.string());
+    }
+    std::error_code ec;
+    const fs::path resolved = fs::weakly_canonical(dest, ec);
+    const fs::path& checked = ec ? dest : resolved;
+    for (const fs::path& denied : safety::hardDenylist()) {
+        const auto [end, _] = std::mismatch(denied.begin(), denied.end(), checked.begin(), checked.end());
+        if (end == denied.end()) {
+            return reject("destination is protected: " + denied.string());
+        }
+    }
+    return true;
+}
+
+ApplyResult applyPlan(const std::vector<Move>& moves, const fs::path& source, const std::atomic<bool>* cancelled,
+                      const ApplyProgress& progress) {
+    safety::AllowedRoots allowed;
+    allowed.add(source);
+    ApplyResult result;
+    for (std::size_t i = 0; i < moves.size(); ++i) {
+        if (cancelled != nullptr && cancelled->load()) {
+            break;
+        }
+        const Move& move = moves[i];
+        std::string reason;
+        if (!safety::isSafeToDelete(move.from, allowed, &reason) || !moveFile(move.from, move.to, &reason)) {
+            result.problems.push_back(move.from.string() + ": " + reason);
+        } else {
+            ++result.moved;
+        }
+        if (progress) {
+            progress(i + 1, moves.size());
+        }
+    }
+    return result;
 }
 
 } // namespace maccleaner::organizer

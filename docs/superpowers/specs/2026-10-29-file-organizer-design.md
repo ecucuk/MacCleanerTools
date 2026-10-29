@@ -5,8 +5,9 @@ Date: 2026-10-29. Branch: `organizer-develop` (from `main`).
 ## Goal
 
 Sort a flat or mixed folder (for example `Photos/unCategorized`, 10,982
-photos and videos) into folders by file type, then by date (media) or by
-artist and album (music). The tool is a new sidebar entry. It is not part
+photos and videos) into folders by file type. Photos are sorted by content
+(Vision) and date. Videos are sorted by date. Music and documents only get
+a folder per type. The tool is a new sidebar entry. It is not part
 of Photo Cleaner.
 
 Success: run on a copy of `/Volumes/ecHDD/Photos/unCategorized`, preview
@@ -19,19 +20,22 @@ Each file goes to `<dest>/<relative target>`:
 
 | Kind | Extensions (case-insensitive) | Target |
 |---|---|---|
-| Photos | jpg jpeg heic heif png gif tif tiff bmp webp dng cr2 cr3 nef arw raf orf rw2 | `Photos/YYYY/YYYY-MM/<name>` |
+| Photos | jpg jpeg heic heif png gif tif tiff bmp webp dng cr2 cr3 nef arw raf orf rw2 | `Photos/<Category>/YYYY/YYYY-MM/<name>` |
 | Videos | mp4 mov m4v avi mkv mts m2ts 3gp wmv webm | `Videos/YYYY/YYYY-MM/<name>` |
-| Music | mp3 m4a aac flac wav aiff aif alac ogg opus wma | `Music/<Artist>/<Album>/<name>` |
+| Music | mp3 m4a aac flac wav aiff aif alac ogg opus wma | `Music/<name>` |
 | Documents | pdf doc docx xls xlsx ppt pptx key pages numbers txt rtf md csv odt | `Documents/<name>` |
 | Other | everything else | `Other/<name>` |
 
 - Date for photos: EXIF `DateTimeOriginal`, else TIFF `DateTime`.
 - Date for videos: the AVFoundation `creationDate` of the asset.
 - If metadata has no date, use the file birth time (`st_birthtime`).
-- Music: the AVFoundation common metadata `artist` and `albumName`. Use
-  `Unknown Artist` / `Unknown Album` when a tag is missing. Replace `/`
-  and `:` in tag values with `-`, trim spaces, and use the fallback for
-  an empty result or for `.` / `..`.
+- Photo category: Vision `VNClassifyImageRequest` on a 512 px thumbnail
+  (ImageIO, no full decode). Labels map to one category with the
+  precedence and the 0.5 confidence threshold from reverted commit
+  ba1e5f9 (`categoryFromLabels`): Screenshots, Documents, People, Animals,
+  Food, Vehicles, Buildings, Nature, else Other. Reuse that code
+  (`categoryFromLabels`, `classifyCGImage`) in the organizer.
+- An image that ImageIO cannot decode gets the category Other.
 - Dates use the local time zone.
 
 ## Collisions and no-ops
@@ -74,7 +78,8 @@ flowchart LR
 1. `include/maccleaner/organizer.hpp`, `src/organizer.cpp` (pure C++):
    - `enum class Kind { Photos, Videos, Music, Documents, Other }`,
      `kindName()`, `kindFromPath()`.
-   - `struct FileMeta { path; Kind; optional<time_t> date; artist; album; }`.
+   - `enum class PhotoCategory`, `categoryName()`, `categoryFromLabels()`.
+   - `struct FileMeta { path; Kind; optional<time_t> date; PhotoCategory category; }`.
    - `struct Move { from; to; }`.
    - `planOrganize(files, dest, existsFn) -> vector<Move>`: applies the
      layout rules, the skip rule and the collision rule. `existsFn` is
@@ -85,8 +90,9 @@ flowchart LR
      metadata reader.
    - `applyPlan(moves, allowed, progress, cancelled) -> Result {moved, problems}`.
 2. `src/platform/metadata_mac.{h,mm}`: `readMetadata(path, kind, FileMeta&)`
-   with ImageIO (`CGImageSourceCopyPropertiesAtIndex`, no decode) and
-   AVFoundation (`AVURLAsset` metadata). `src/platform/move_mac.mm`
+   with ImageIO (`CGImageSourceCopyPropertiesAtIndex` for the date, a
+   512 px thumbnail for Vision) and AVFoundation (`AVURLAsset`
+   `creationDate`). Only photos and videos read metadata. `src/platform/move_mac.mm`
    gives `moveFile()`. `src/platform/metadata_fallback.cpp` for the
    non-Apple build uses birth time only and `std::filesystem::rename`
    (the same pattern as `image_fallback.cpp`).
@@ -97,13 +103,15 @@ flowchart LR
    `MCOrganizerViewController`:
    - Source and destination pickers. The destination is the source by
      default. The last folders are remembered in `NSUserDefaults`.
-   - **Preview** builds the plan and shows an outline view: kind > year
-     (or artist) > month (or album) > files, with counts.
+   - **Preview** builds the plan and shows an outline view of the target
+     folders (kind > category > year > month > files), with counts.
+     Vision makes the preview of about 7,500 photos take minutes on the
+     HDD, so it shows progress and supports Cancel.
    - **Organize** applies the plan with progress and Cancel, then shows
      the moved count and a sheet with any problems.
    - A new `MCToolEntry` "File Organizer" in `MCMainWindowController.mm`.
 5. CMake: add the new sources to the `if(APPLE)` platform list, and link
-   AVFoundation to `maccleaner_core` next to ImageIO (already linked).
+   AVFoundation and Vision to `maccleaner_core` next to ImageIO.
 
 ## Error handling
 
@@ -118,9 +126,10 @@ flowchart LR
 
 - Unit tests in `tests/maccleaner_tests.cpp`:
   - `kindFromPath` for each kind and for upper-case extensions.
-  - `planOrganize`: date paths, music paths, the Unknown fallbacks, tag
-    sanitizing, the skip rule, collisions inside the plan and with
-    existing files.
+  - `categoryFromLabels`: precedence and threshold.
+  - `planOrganize`: photo paths with category and date, video date
+    paths, flat music and document paths, the skip rule, collisions
+    inside the plan and with existing files.
   - `applyPlan` on a temporary folder under `$HOME` (the safety layer
     rejects `/private`): moves, a refused move outside the allowed root,
     a second run that moves nothing.
@@ -131,6 +140,7 @@ flowchart LR
 
 ## Not in scope
 
-Copy mode; undo and a move log; deleting empty folders; content
-(Vision) categories; matching photos to existing event folders by date;
+Copy mode; undo and a move log; deleting empty folders; music artist and
+album folders; Vision for videos; matching photos to existing event
+folders by date; a scan cache;
 duplicate detection (Photo Cleaner does that).

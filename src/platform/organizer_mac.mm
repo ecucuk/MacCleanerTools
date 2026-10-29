@@ -136,6 +136,17 @@ void readVideo(FileMeta& meta, NSURL* url) {
 
 } // namespace
 
+bool isPackageDirectory(const std::filesystem::path& dir) {
+    @autoreleasepool {
+        NSString* path = [NSString stringWithUTF8String:dir.c_str()];
+        NSNumber* isPackage = nil;
+        return path != nil &&
+               [[NSURL fileURLWithPath:path isDirectory:YES] getResourceValue:&isPackage forKey:NSURLIsPackageKey
+                                                                         error:nil] &&
+               isPackage.boolValue;
+    }
+}
+
 GeocodeStatus reverseGeocode(GeoPoint point, Place& place) {
     @autoreleasepool {
         CLLocation* location = [[CLLocation alloc] initWithLatitude:point.latitude longitude:point.longitude];
@@ -171,12 +182,21 @@ GeocodeStatus reverseGeocode(GeoPoint point, Place& place) {
           done = true;
           dispatch_semaphore_signal(finished);
         }];
+        // A stalled network must not hang the scan (or its Cancel) for good.
+        constexpr double kTimeoutSeconds = 30;
+        bool timedOut = false;
         if (NSThread.isMainThread) {
-            while (!done) {
+            const CFAbsoluteTime deadline = CFAbsoluteTimeGetCurrent() + kTimeoutSeconds;
+            while (!done && !(timedOut = CFAbsoluteTimeGetCurrent() > deadline)) {
                 CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.1, true);
             }
         } else {
-            dispatch_semaphore_wait(finished, DISPATCH_TIME_FOREVER);
+            timedOut = dispatch_semaphore_wait(
+                           finished, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kTimeoutSeconds * NSEC_PER_SEC))) != 0;
+        }
+        if (timedOut) {
+            [request cancel];
+            return GeocodeStatus::Failed;
         }
         place.country = country != nil ? country.UTF8String : "";
         place.province = province != nil ? province.UTF8String : "";

@@ -161,6 +161,12 @@ int runOrganize(const CliOptions& options) {
     }
     std::cout << "================================\n";
     std::cout << moves.size() << " of " << files.size() << " file(s) to move into " << dest.string() << "\n";
+    if (options.photoLayout == organizer::PhotoLayout::Place) {
+        if (const std::size_t waiting = organizer::countWaitingForPlace(files); waiting > 0) {
+            std::cout << waiting << " photo(s) stay where they are: their place lookup failed (offline?). "
+                      << "Run again later.\n";
+        }
+    }
     if (!options.apply) {
         std::cout << "Dry run. Pass --apply to move them.\n";
         return 0;

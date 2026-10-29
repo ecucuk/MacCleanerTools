@@ -52,6 +52,7 @@ struct FileMeta {
     std::string country;              // from resolvePlaces; empty = unknown
     std::string province;             // state / il
     std::string city;                 // city / ilce
+    bool placeResolved = false;       // resolvePlaces had an answer for its cell
 };
 
 // How photos are grouped under Photos/.
@@ -89,7 +90,10 @@ using ExistsFn = std::function<bool(const std::filesystem::path& path)>;
 //   Videos/YYYY/YYYY-MM/<name>,
 //   Music/<name>, Documents/<name>, Other/<name>  (dates in local time).
 // A file already at its target is left out, so a second run plans nothing.
-// Photos and videos without a date are left out. No two moves share a
+// Photos and videos without a date are left out, and so are located photos
+// whose place lookup failed (Place layout). A .xmp/.aae/.thm sidecar, and a
+// video with the stem of a photo (Live Photo), follow that file's folder and
+// final name. Targets are compared case-insensitively. No two moves share a
 // target and no target `exists`: later files get "name (2).ext", "(3)", ...
 std::vector<Move> planOrganize(const std::vector<FileMeta>& files, const std::filesystem::path& dest,
                                const ExistsFn& exists, PhotoLayout layout = PhotoLayout::Content);
@@ -125,10 +129,18 @@ void readMetadata(FileMeta& meta);
 using MetadataFn = std::function<void(FileMeta& meta)>;
 using ScanProgress = std::function<void(std::size_t filesSeen)>;
 
+// True for a directory macOS shows as one file (NSURLIsPackageKey). Platform code.
+bool isPackageDirectory(const std::filesystem::path& dir);
+
+// Located photos without a place answer (planOrganize holds them back in the
+// Place layout until a later run can look them up).
+std::size_t countWaitingForPlace(const std::vector<FileMeta>& files);
+
 // Every file under `source` that the organizer would place, with `read`
 // applied and a missing date replaced by the file's birth time. Skips
-// hidden files and folders, app bundles, Photos libraries, and the
-// Photos/ Videos/ Music/ Documents/ Other/ folders directly under `dest`
+// hidden files and folders, packages (apps, iMovie / Lightroom libraries,
+// Keynote decks, ...), Photos libraries, and the
+// Photos/ Videos/ Music/ Documents/ Other/ folders (any letter case) directly under `dest`
 // (already organized when `dest` is inside `source`).
 std::vector<FileMeta> scanForOrganize(const std::filesystem::path& source, const std::filesystem::path& dest,
                                       const std::atomic<bool>* cancelled = nullptr, const ScanProgress& progress = {},

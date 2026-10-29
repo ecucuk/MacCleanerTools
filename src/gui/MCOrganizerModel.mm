@@ -105,7 +105,7 @@ NSArray<MCOrganizerGroup *> *groupsFromNode(const Node &node) {
               byPlace:(BOOL)byPlace
              progress:(void (^)(NSString *))progress
            completion:(void (^)(NSArray<MCOrganizerGroup *> *, NSArray<MCOrganizerPin *> *, NSUInteger, NSUInteger,
-                                NSString *_Nullable))completion {
+                                NSUInteger, NSString *_Nullable))completion {
     if (self.busy) {
         return;
     }
@@ -131,7 +131,7 @@ NSArray<MCOrganizerGroup *> *groupsFromNode(const Node &node) {
             NSString *message = toNSString(reason);
             dispatch_async(dispatch_get_main_queue(), ^{
                 self.busy = NO;
-                completion(@[], @[], 0, 0, message);
+                completion(@[], @[], 0, 0, 0, message);
             });
             return;
         }
@@ -179,9 +179,10 @@ NSArray<MCOrganizerGroup *> *groupsFromNode(const Node &node) {
         NSArray<MCOrganizerGroup *> *groups = groupsFromNode(root);
         const NSUInteger moveCount = self->_plan.size();
         const NSUInteger fileCount = files.size();
+        const NSUInteger waitingCount = byPlace ? organizer::countWaitingForPlace(files) : 0;
         dispatch_async(dispatch_get_main_queue(), ^{
             self.busy = NO;
-            completion(groups, pins, moveCount, fileCount, nil);
+            completion(groups, pins, moveCount, fileCount, waitingCount, nil);
         });
     });
 }

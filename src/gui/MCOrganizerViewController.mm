@@ -34,6 +34,7 @@ NSTextField *pathLabel(NSString *text) {
 @property(nonatomic, copy) NSArray<MCOrganizerGroup *> *groups;
 @property(nonatomic) NSUInteger moveCount;
 @property(nonatomic) BOOL hasPreview;
+@property(nonatomic) BOOL previewByPlace; // the layout the shown plan was made with
 
 @property(nonatomic, strong) MCHeroView *hero;
 @property(nonatomic, strong) MCToolBanner *banner;
@@ -301,9 +302,18 @@ NSTextField *pathLabel(NSString *text) {
     }];
 }
 
+- (BOOL)byPlace {
+    return self.layoutPopUp.indexOfSelectedItem == 1;
+}
+
 - (void)layoutChanged:(id)sender {
-    [NSUserDefaults.standardUserDefaults setBool:self.layoutPopUp.indexOfSelectedItem == 1 forKey:kByPlaceKey];
-    if (self.hasPreview && !self.model.busy) {
+    [NSUserDefaults.standardUserDefaults setBool:self.byPlace forKey:kByPlaceKey];
+    if (self.model.busy) {
+        [self.model cancel]; // its completion sees the layout changed and drops the plan
+        return;
+    }
+    if (self.hasPreview) {
+        [self invalidatePreview];
         [self previewOrStop:nil];
     }
 }
@@ -325,16 +335,23 @@ NSTextField *pathLabel(NSString *text) {
     }
     __weak MCOrganizerViewController *weakSelf = self;
     [self setStatus:@"Reading files…"];
+    self.previewByPlace = self.byPlace;
     [self.model previewSource:self.source
         destination:self.effectiveDestination
-        byPlace:self.layoutPopUp.indexOfSelectedItem == 1
+        byPlace:self.previewByPlace
         progress:^(NSString *status) {
             [weakSelf setStatus:status];
         }
         completion:^(NSArray<MCOrganizerGroup *> *groups, NSArray<MCOrganizerPin *> *pins, NSUInteger moveCount,
-                     NSUInteger fileCount, NSString *error) {
+                     NSUInteger fileCount, NSUInteger waitingCount, NSString *error) {
             MCOrganizerViewController *strongSelf = weakSelf;
             if (strongSelf == nil) {
+                return;
+            }
+            if (strongSelf.previewByPlace != strongSelf.byPlace) {
+                // The layout changed while this ran: its plan no longer matches the pop-up.
+                [strongSelf invalidatePreview];
+                [strongSelf setStatus:@"The layout changed. Press Preview again."];
                 return;
             }
             strongSelf.groups = groups;
@@ -345,9 +362,15 @@ NSTextField *pathLabel(NSString *text) {
             [strongSelf setStatus:error != nil
                                       ? error
                                       : [NSString stringWithFormat:@"%lu of %lu file(s) will move; %lu photo place(s) "
-                                                                   @"on the map.",
+                                                                   @"on the map.%@",
                                                                    (unsigned long)moveCount, (unsigned long)fileCount,
-                                                                   (unsigned long)pins.count]];
+                                                                   (unsigned long)pins.count,
+                                                                   waitingCount > 0
+                                                                       ? [NSString stringWithFormat:
+                                                                                       @" %lu photo(s) stay: place "
+                                                                                       @"lookup failed, try later.",
+                                                                                       (unsigned long)waitingCount]
+                                                                       : @""]];
             [strongSelf updateState];
             if (error != nil) {
                 NSAlert *alert = [[NSAlert alloc] init];

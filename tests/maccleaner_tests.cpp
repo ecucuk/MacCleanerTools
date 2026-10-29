@@ -1737,10 +1737,12 @@ void testPlanPlaceLayout() {
     istanbul.country = "Turkey";
     istanbul.province = "Istanbul";
     istanbul.city = "Kartal";
+    istanbul.placeResolved = true;
     auto noCity = meta("/s/c.jpg");
     noCity.location = organizer::GeoPoint{39.0, 35.0};
     noCity.country = "Turkey";
     noCity.province = "Ankara";
+    noCity.placeResolved = true;
     const auto moves = organizer::planOrganize({istanbul, meta("/s/b.jpg"), noCity, meta("/s/v.mp4")}, "/d",
                                                kNothingExists, organizer::PhotoLayout::Place);
     CHECK_EQ(moves.size(), std::size_t{4});
@@ -1813,7 +1815,7 @@ void testResolvePlacesRetriesThrottled() {
     fake.script = {organizer::GeocodeStatus::Throttled};
     organizer::resolvePlaces(files, tree.root() / "geo.tsv", nullptr, {}, fake.geocode(), fake.sleep());
     CHECK_EQ(fake.calls, std::size_t{2});
-    CHECK(std::find(fake.sleeps.begin(), fake.sleeps.end(), 60000) != fake.sleeps.end());
+    CHECK(std::accumulate(fake.sleeps.begin(), fake.sleeps.end(), 0LL) >= 60000);
     CHECK_EQ(files[0].city, std::string("Kartal"));
 }
 
@@ -1828,6 +1830,98 @@ void testResolvePlacesSkipsFailedInCache() {
     organizer::resolvePlaces(files, tree.root() / "geo.tsv", nullptr, {}, again.geocode(), again.sleep());
     // The failed cell is asked again; the NotFound cell is cached.
     CHECK_EQ(again.calls, std::size_t{1});
+}
+
+// --- review fixes -----------------------------------------------------------
+
+void testScanSkipsPackages() {
+    ScratchTree tree;
+    const fs::path root = tree.root();
+    fs::remove(root / "child_file.txt");
+    for (const char* name : {"X.imovielibrary/Original Media/a.mov", "Deck.KEY/Data/b.jpg", "Notes.rtfd/c.png",
+                             "Cat.lrdata/d.jpg", "23.10.2021 Kına/e.jpg"}) {
+        writeFileOfSize(root / name, 1);
+    }
+    const auto files = organizer::scanForOrganize(root, root, nullptr, {}, kNoMetadata);
+    // Packages stay whole; a dotted folder name that is not a package is entered.
+    CHECK(relativePaths(files, root) == (std::vector<std::string>{"23.10.2021 Kına/e.jpg"}));
+}
+
+void testScanSkipsKindFoldersAnyCase() {
+    ScratchTree tree;
+    const fs::path root = tree.root();
+    fs::remove(root / "child_file.txt");
+    writeFileOfSize(root / "music/a.mp3", 1);
+    writeFileOfSize(root / "PHOTOS/b.jpg", 1);
+    CHECK(organizer::scanForOrganize(root, root, nullptr, {}, kNoMetadata).empty());
+}
+
+void testPlanCollisionsIgnoreCase() {
+    const auto moves =
+        organizer::planOrganize({meta("/s/a/IMG_1.JPG"), meta("/s/b/img_1.jpg")}, "/d", kNothingExists);
+    CHECK_EQ(moves.size(), std::size_t{2});
+    if (moves.size() == 2) {
+        CHECK_EQ(moves[1].to.string(), std::string("/d/Photos/Other/2023/2023-07/img_1 (2).jpg"));
+    }
+    // Already in place apart from letter case: a case-insensitive disk sees the same file.
+    const auto placed = organizer::planOrganize({meta("/d/photos/other/2023/2023-07/a.jpg")}, "/d",
+                                                [](const fs::path&) { return true; });
+    CHECK(placed.empty());
+}
+
+void testPlanHoldsUnresolvedPlaces() {
+    ScratchTree tree;
+    std::vector<organizer::FileMeta> files = {photoAt("/s/a.jpg", 41.0082, 28.9784), meta("/s/b.jpg")};
+    FakeGeocoder fake;
+    fake.script = {organizer::GeocodeStatus::Failed};
+    organizer::resolvePlaces(files, tree.root() / "geo.tsv", nullptr, {}, fake.geocode(), fake.sleep());
+    CHECK(!files[0].placeResolved);
+    const auto moves = organizer::planOrganize(files, "/d", kNothingExists, organizer::PhotoLayout::Place);
+    // The photo whose lookup failed waits for the next run instead of landing in Unknown Place.
+    CHECK_EQ(moves.size(), std::size_t{1});
+    if (moves.size() == 1) {
+        CHECK_EQ(moves[0].from.string(), std::string("/s/b.jpg"));
+    }
+    // The content layout does not need places.
+    CHECK_EQ(organizer::planOrganize(files, "/d", kNothingExists).size(), std::size_t{2});
+}
+
+void testResolvePlacesCancelStopsThrottlePause() {
+    ScratchTree tree;
+    std::vector<organizer::FileMeta> files = {photoAt("/s/a.jpg", 41.0082, 28.9784)};
+    std::atomic<bool> cancelled{false};
+    std::size_t calls = 0;
+    std::vector<long long> sleeps;
+    organizer::resolvePlaces(
+        files, tree.root() / "geo.tsv", &cancelled, {},
+        [&](organizer::GeoPoint, organizer::Place&) {
+            ++calls;
+            cancelled.store(true);
+            return organizer::GeocodeStatus::Throttled;
+        },
+        [&](std::chrono::milliseconds ms) { sleeps.push_back(ms.count()); });
+    CHECK_EQ(calls, std::size_t{1});
+    CHECK(std::accumulate(sleeps.begin(), sleeps.end(), 0LL) < 60000);
+}
+
+void testPlanKeepsSidecarsWithPhoto() {
+    const auto moves = organizer::planOrganize(
+        {meta("/s/x/IMG_1.HEIC", kJuly2023, organizer::PhotoCategory::People), meta("/s/x/IMG_1.MOV"),
+         meta("/s/x/IMG_1.AAE"), meta("/s/x/IMG_2.xmp"), meta("/s/y/IMG_1.HEIC", kJuly2023, organizer::PhotoCategory::People),
+         meta("/s/y/IMG_1.xmp")},
+        "/d", kNothingExists);
+    std::map<std::string, std::string> to;
+    for (const auto& move : moves) {
+        to[move.from.string()] = move.to.string();
+    }
+    const std::string folder = "/d/Photos/People/2023/2023-07/";
+    CHECK_EQ(to["/s/x/IMG_1.HEIC"], folder + "IMG_1.HEIC");
+    CHECK_EQ(to["/s/x/IMG_1.MOV"], folder + "IMG_1.MOV"); // Live Photo video stays with its photo
+    CHECK_EQ(to["/s/x/IMG_1.AAE"], folder + "IMG_1.AAE");
+    CHECK_EQ(to["/s/x/IMG_2.xmp"], std::string("/d/Other/IMG_2.xmp")); // no partner
+    // The second IMG_1 gets a suffix, and its sidecar follows the new name.
+    CHECK_EQ(to["/s/y/IMG_1.HEIC"], folder + "IMG_1 (2).HEIC");
+    CHECK_EQ(to["/s/y/IMG_1.xmp"], folder + "IMG_1 (2).xmp");
 }
 
 void testCliParsesOrganize() {
@@ -1958,6 +2052,12 @@ int main() {
     testResolvePlacesRetriesThrottled();
     testResolvePlacesSkipsFailedInCache();
     testCliParsesOrganize();
+    testScanSkipsPackages();
+    testScanSkipsKindFoldersAnyCase();
+    testPlanCollisionsIgnoreCase();
+    testPlanHoldsUnresolvedPlaces();
+    testResolvePlacesCancelStopsThrottlePause();
+    testPlanKeepsSidecarsWithPhoto();
 
     if (g_failures == 0) {
         std::cout << "All tests passed.\n";

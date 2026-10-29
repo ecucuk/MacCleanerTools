@@ -26,6 +26,10 @@ bool moveFile(const std::filesystem::path& from, const std::filesystem::path& to
 
 void readMetadata(FileMeta&) {}
 
+bool isPackageDirectory(const std::filesystem::path&) {
+    return false;
+}
+
 GeocodeStatus reverseGeocode(GeoPoint, Place&) {
     return GeocodeStatus::Failed;
 }

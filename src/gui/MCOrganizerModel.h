@@ -32,13 +32,15 @@ NS_ASSUME_NONNULL_BEGIN
 /// and keeps that plan for -organize.... With `byPlace`, photo locations are
 /// reverse geocoded (grid-cell centers go to Apple; results are cached).
 /// `progress` (~4 Hz) gets a status line. `error` is set and the plan is
-/// empty when the destination is refused.
+/// empty when the destination is refused. `waitingCount` photos (By Place)
+/// stay put because their place lookup failed.
 - (void)previewSource:(NSString *)source
           destination:(NSString *)destination
               byPlace:(BOOL)byPlace
              progress:(void (^)(NSString *status))progress
            completion:(void (^)(NSArray<MCOrganizerGroup *> *groups, NSArray<MCOrganizerPin *> *pins,
-                                NSUInteger moveCount, NSUInteger fileCount, NSString *_Nullable error))completion;
+                                NSUInteger moveCount, NSUInteger fileCount, NSUInteger waitingCount,
+                                NSString *_Nullable error))completion;
 
 /// Runs the last preview's plan: each move goes through the safety layer
 /// with the source as the only allowed root and never replaces a file.

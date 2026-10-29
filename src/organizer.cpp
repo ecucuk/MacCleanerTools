@@ -124,6 +124,14 @@ std::string folderName(std::string_view raw, std::string_view fallback) {
 
 namespace {
 
+// ASCII case folding: macOS volumes are case-insensitive by default, so
+// "music/" is the Music folder and "IMG_1.JPG" collides with "img_1.jpg".
+std::string folded(std::string text) {
+    std::transform(text.begin(), text.end(), text.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return text;
+}
+
 std::string formatLocal(std::time_t time, const char* format) {
     std::tm local{};
     localtime_r(&time, &local);
@@ -136,6 +144,9 @@ std::optional<fs::path> targetFolder(const FileMeta& file, const fs::path& dest,
     if (file.kind == Kind::Photos && layout == PhotoLayout::Content) {
         folder /= categoryName(file.category);
     } else if (file.kind == Kind::Photos) {
+        if (file.location && !file.placeResolved) {
+            return std::nullopt; // the lookup failed; a later run places it
+        }
         const std::string country = folderName(file.country, "");
         folder = country.empty() ? folder / "Unknown Place"
                                  : folder / country / folderName(file.province, "Unknown Province") /
@@ -154,26 +165,75 @@ std::optional<fs::path> targetFolder(const FileMeta& file, const fs::path& dest,
 
 std::vector<Move> planOrganize(const std::vector<FileMeta>& files, const fs::path& dest, const ExistsFn& exists,
                                PhotoLayout layout) {
+    // A sidecar (.xmp/.aae/.thm) or a Live Photo video belongs to the photo
+    // (or, for a sidecar, the video) with the same stem in the same folder:
+    // it follows that file's folder and final name, so the pair stays linked.
+    const auto key = [](const fs::path& path) { return folded((path.parent_path() / path.stem()).string()); };
+    const auto isSidecar = [](const fs::path& path) {
+        const std::string extension = folded(path.extension().string());
+        return extension == ".xmp" || extension == ".aae" || extension == ".thm";
+    };
+    std::map<std::string, std::size_t> photoByKey, videoByKey;
+    for (std::size_t i = 0; i < files.size(); ++i) {
+        if (files[i].kind == Kind::Photos) {
+            photoByKey.emplace(key(files[i].path), i);
+        } else if (files[i].kind == Kind::Videos) {
+            videoByKey.emplace(key(files[i].path), i);
+        }
+    }
+    std::vector<std::optional<std::size_t>> partner(files.size());
+    for (std::size_t i = 0; i < files.size(); ++i) {
+        const auto photo = photoByKey.find(key(files[i].path));
+        const auto video = videoByKey.find(key(files[i].path));
+        if (isSidecar(files[i].path)) {
+            if (photo != photoByKey.end()) {
+                partner[i] = photo->second;
+            } else if (video != videoByKey.end()) {
+                partner[i] = video->second;
+            }
+        } else if (files[i].kind == Kind::Videos && photo != photoByKey.end()) {
+            partner[i] = photo->second;
+        }
+    }
+
     std::vector<Move> moves;
-    std::set<fs::path> taken;
-    for (const FileMeta& file : files) {
-        const std::optional<fs::path> folder = targetFolder(file, dest, layout);
-        if (!folder) {
-            continue;
-        }
-        fs::path target = *folder / file.path.filename();
-        if (target == file.path) {
-            continue;
-        }
-        const std::string stem = file.path.stem().string();
+    std::set<std::string> taken; // folded target paths
+    std::vector<std::optional<fs::path>> placedAt(files.size()); // target of each moved file
+    const auto place = [&](std::size_t i, const fs::path& folder, const std::string& stem) {
+        const FileMeta& file = files[i];
         const std::string extension = file.path.extension().string();
-        for (int n = 2; taken.count(target) != 0 || exists(target); ++n) {
-            target = *folder / (stem + " (" + std::to_string(n) + ")" + extension);
+        fs::path target = folder / (stem + extension);
+        if (folded(target.string()) == folded(file.path.string())) {
+            return; // already in place (maybe in another letter case)
         }
-        taken.insert(target);
+        for (int n = 2; taken.count(folded(target.string())) != 0 || exists(target); ++n) {
+            target = folder / (stem + " (" + std::to_string(n) + ")" + extension);
+        }
+        taken.insert(folded(target.string()));
+        placedAt[i] = target;
         moves.push_back({file.path, target});
+    };
+    for (int pass = 0; pass < 2; ++pass) {
+        for (std::size_t i = 0; i < files.size(); ++i) {
+            const bool follows = partner[i] && placedAt[*partner[i]];
+            if (pass == 0 ? partner[i].has_value() : !partner[i].has_value()) {
+                continue;
+            }
+            if (follows) {
+                const fs::path& lead = *placedAt[*partner[i]];
+                place(i, lead.parent_path(), lead.stem().string());
+            } else if (const std::optional<fs::path> folder = targetFolder(files[i], dest, layout)) {
+                place(i, *folder, files[i].path.stem().string());
+            }
+        }
     }
     return moves;
+}
+
+std::size_t countWaitingForPlace(const std::vector<FileMeta>& files) {
+    return static_cast<std::size_t>(std::count_if(files.begin(), files.end(), [](const FileMeta& file) {
+        return file.kind == Kind::Photos && file.location && !file.placeResolved;
+    }));
 }
 
 bool isValidDestination(const fs::path& dest, std::string* reason) {
@@ -231,7 +291,7 @@ std::vector<FileMeta> scanForOrganize(const fs::path& source, const fs::path& de
     const fs::path destination = fs::weakly_canonical(dest, ec);
     const auto isKindFolder = [](const std::string& name) {
         for (Kind kind : {Kind::Photos, Kind::Videos, Kind::Music, Kind::Documents, Kind::Other}) {
-            if (name == kindName(kind)) {
+            if (folded(name) == folded(kindName(kind))) {
                 return true;
             }
         }
@@ -239,7 +299,14 @@ std::vector<FileMeta> scanForOrganize(const fs::path& source, const fs::path& de
     };
     const auto enterDir = [&](const fs::path& dir) {
         const std::string name = dir.filename().string();
-        const bool isBundle = dir.extension() == ".app";
+        // Packages (apps, iMovie / Lightroom libraries, Keynote decks, ...)
+        // stay whole: moving the files inside them out breaks them.
+        static const std::set<std::string> kPackages = {
+            ".app", ".photoslibrary", ".photolibrary", ".aplibrary", ".imovielibrary", ".fcpbundle", ".band",
+            ".logicx", ".lrdata", ".rtfd", ".pages", ".key", ".numbers", ".bundle", ".framework", ".plugin",
+            ".musiclibrary", ".tvlibrary", ".sparsebundle", ".xcodeproj", ".xcworkspace",
+        };
+        const bool isBundle = kPackages.count(folded(dir.extension().string())) != 0 || isPackageDirectory(dir);
         return !(name.empty() || name.front() == '.' || isBundle || safety::isInsidePhotosLibrary(dir) ||
                  (dir.parent_path() == destination && isKindFolder(name)));
     };
@@ -284,7 +351,14 @@ std::string cacheField(std::string text) {
 void resolvePlaces(std::vector<FileMeta>& files, const fs::path& cacheFile, const std::atomic<bool>* cancelled,
                    const std::function<void(std::size_t done, std::size_t total)>& progress, const GeocodeFn& geocode,
                    const SleepFn& sleep) {
-    const SleepFn pause = sleep ? sleep : SleepFn([](std::chrono::milliseconds ms) { std::this_thread::sleep_for(ms); });
+    const SleepFn sleepFor = sleep ? sleep : SleepFn([](std::chrono::milliseconds ms) { std::this_thread::sleep_for(ms); });
+    const auto isCancelled = [&] { return cancelled != nullptr && cancelled->load(); };
+    // Waits in short steps so Cancel never sits out a 60 s throttle pause.
+    const auto pause = [&](std::chrono::milliseconds total) {
+        for (auto left = total; left.count() > 0 && !isCancelled(); left -= std::chrono::milliseconds(500)) {
+            sleepFor(std::min(left, std::chrono::milliseconds(500)));
+        }
+    };
     std::map<GeoCell, Place> known;
     {
         std::ifstream in(cacheFile);
@@ -327,8 +401,10 @@ void resolvePlaces(std::vector<FileMeta>& files, const fs::path& cacheFile, cons
         }
         Place place;
         GeocodeStatus status = geocode(cellCenter(missing[i]), place);
-        if (status == GeocodeStatus::Throttled) {
+        if (status == GeocodeStatus::Throttled && !isCancelled()) {
             pause(std::chrono::milliseconds(60000));
+        }
+        if (status == GeocodeStatus::Throttled && !isCancelled()) {
             place = {};
             status = geocode(cellCenter(missing[i]), place);
         }
@@ -353,6 +429,7 @@ void resolvePlaces(std::vector<FileMeta>& files, const fs::path& cacheFile, cons
             if (found != known.end()) {
                 file.country = found->second.country;
                 file.province = found->second.province;
+                file.placeResolved = true;
                 file.city = found->second.city;
             }
         }

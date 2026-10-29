@@ -23,7 +23,8 @@ macOS "Swiss Army knife" for disk and performance: a C++20 core
 (`maccleaner_core`) with two front ends — `mac_cleaner` CLI and
 `MacCleaner.app` (AppKit, ObjC++, plus one SwiftUI window). Tools in the
 app sidebar: **Storage Cleaner**, **Large Files** (with Quick Look),
-**Performance** (process monitor + **Optimize**).
+**Photo Cleaner**, **File Organizer** (type → Vision category or place →
+date, with a map), **Performance** (process monitor + **Optimize**).
 
 - Repo: `~/Projects/Repos/MacCleanerTools`
 - Remote: `git@github.com:ecucuk/MacCleanerTools.git`
@@ -83,6 +84,10 @@ Both merge into `main` **cleanly** (checked with `git merge-tree`, optimizer
 first then base). Not yet merged — ask before merging.
 
 Untracked `.vscode/` is the user's editor config: leave it alone.
+
+- `organizer-develop`: File Organizer (spec and plan in `docs/superpowers/`).
+  It carries a cherry-pick of 13f082e (external-volume safety) because
+  `main` still denylists `/Volumes`.
 
 ## Backlog
 

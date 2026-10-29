@@ -11,6 +11,10 @@ behind one sidebar:
 - **Photo Cleaner** — find duplicate, near-duplicate and blurry photos in a
   folder or in the Photos library, review them, and remove the ones you
   choose.
+- **File Organizer** — sort a folder into `Photos`, `Videos`, `Music`,
+  `Documents` and `Other`. Photos go into a content category (Vision) or a
+  place (country / province / city from their GPS), then year and month.
+  Preview it as folders or on a map before anything moves.
 - **Performance** — a live view of your processes by CPU, memory and
   uptime, with heavy consumers flagged, guarded Quit / Force Quit, and a
   one-click **Optimize** that finds processes worth reclaiming.
@@ -79,6 +83,9 @@ build/mac_cleaner processes                      # your 20 hungriest processes (
 build/mac_cleaner processes --sort=mem --top=10
 build/mac_cleaner photos --under=~/Pictures      # duplicate groups + blurry photos (report only)
 build/mac_cleaner photos --under=~/Pictures --distance=3 --blur=50
+build/mac_cleaner organize --under=~/Pictures/Unsorted               # dry run: where each file would go
+build/mac_cleaner organize --under=~/Pictures/Unsorted --by=place    # photos by country/province/city
+build/mac_cleaner organize --under=~/Pictures/Unsorted --dest=~/Pictures/Sorted --apply
 build/mac_cleaner optimize                       # report reclaimable processes
 build/mac_cleaner optimize --apply               # and terminate them (SIGTERM)
 ```
@@ -147,6 +154,37 @@ in the background: deleted photos drop out, and only new files or files with
 a changed size or modification time are decoded again (the same applies to
 **Scan Folder…** on a folder scanned before). Moving to Trash stays off until
 that rescan is done.
+
+**File Organizer** asks for a folder and, optionally, a different
+destination (default: the folder itself). **Preview** reads every file
+and shows where it would go:
+
+| Kind | Extensions (examples) | Target |
+|---|---|---|
+| Photos | jpg, heic, png, raw | `Photos/<Category>/YYYY/YYYY-MM/` or `Photos/<Country>/<Province>/<City>/YYYY/YYYY-MM/` |
+| Videos | mp4, mov, m4v | `Videos/YYYY/YYYY-MM/` |
+| Music | mp3, m4a, flac | `Music/` |
+| Documents | pdf, docx, txt | `Documents/` |
+| Other | everything else | `Other/` |
+
+- The date is the EXIF capture date for photos and the AVFoundation
+  creation date for videos. If a file has no date in its metadata, the
+  file's birth time is used. A copied file without metadata can therefore
+  land in the month it was copied.
+- The content categories come from Vision on a 512 px thumbnail: Screenshots,
+  Documents, People, Animals, Food, Vehicles, Buildings, Nature, else Other.
+- **Photos by Place** clusters GPS positions on a ~5 km grid. It sends one
+  rounded position per cell to Apple Maps and caches the answers in
+  `~/Library/Caches/com.maccleaner.app/geocode.tsv`, so a later preview
+  stays offline. Photos without GPS go to `Photos/Unknown Place/`.
+- **Map** shows one pin per cell with its photo count.
+- Hidden files, app bundles, Photos libraries and the five kind folders
+  directly under the destination are skipped. Running the tool again on
+  the same folder therefore moves nothing.
+
+**Organize** asks first, then moves the files. Nothing is overwritten: when a
+name is taken, the file gets a number (`IMG_1 (2).jpg`). Files that cannot
+be moved are listed afterwards. Empty source folders stay.
 
 **Performance** samples your processes every two seconds and shows CPU %,
 memory, kind (App / System / Background), uptime and pid in a sortable
@@ -320,7 +358,13 @@ allowlist-first rather than denylist-first:
    API Finder uses for "Move to Trash". Permanent deletion
    (`std::filesystem::remove_all`) is opt-in via `--permanent` and still
    requires `--apply`.
-7. **Dry run is the default for `clean`.** You always see exactly what
+7. **Organizer moves count as deletes.** A move takes a file away from its
+   folder, so every source passes `isSafeToDelete()` with the chosen folder
+   as the only allowed root. A move on the same volume is one
+   `renamex_np(RENAME_EXCL)` call, which refuses to replace an existing
+   file. A move to another volume copies first, then removes the source.
+   The destination may not be inside a Photos library or a system path.
+8. **Dry run is the default for `clean`** (and for `organize`). You always see exactly what
    would be deleted, and its size, before anything happens; `--apply` is a
    separate, explicit step.
 
@@ -367,9 +411,11 @@ src/                  core implementation + CLI front end (main.cpp)
 src/platform/         OS-specific Trash backend (trash_mac.mm / trash_fallback.cpp)
 src/gui/              AppKit front end: MCMainWindowController = sidebar shell,
                       MCCleanerViewController / MCLargeFilesViewController /
-                      MCPerformanceViewController = tools,
+                      MCPerformanceViewController / MCPhotosViewController /
+                      MCOrganizerViewController = tools,
                       MCOptimizeSheetController = the Optimize review sheet,
-                      MCScanModel / MCBigFilesModel / MCProcessModel =
+                      MCScanModel / MCBigFilesModel / MCProcessModel /
+                      MCPhotoModel / MCOrganizerModel =
                       core wrappers + threading,
                       main.mm = NSApplication
 src/gui/viz/          SwiftUI Activity window (own static lib, bridged via

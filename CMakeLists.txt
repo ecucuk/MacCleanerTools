@@ -47,6 +47,7 @@ set(MACCLEANER_CORE_SOURCES
     src/optimizer.cpp
     src/cli.cpp
     src/walk.cpp
+    src/organizer.cpp
     src/photos.cpp
 )
 

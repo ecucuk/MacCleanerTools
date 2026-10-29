@@ -6,6 +6,7 @@
 #include "maccleaner/bigfiles.hpp"
 #include "maccleaner/cleaner.hpp"
 #include "maccleaner/optimizer.hpp"
+#include "maccleaner/organizer.hpp"
 #include "maccleaner/photos.hpp"
 #include "maccleaner/processes.hpp"
 #include "maccleaner/cli.hpp"
@@ -57,6 +58,7 @@ int g_failures = 0;
     } while (0)
 
 namespace fs = std::filesystem;
+namespace organizer = maccleaner::organizer;
 using maccleaner::humanReadableBytes;
 using maccleaner::safety::AllowedRoots;
 using maccleaner::safety::isSafeToDelete;
@@ -1480,6 +1482,94 @@ void testPhotoCacheRoundTrip() {
     CHECK(!photos::loadPhotoCache(file, "/x", loaded));
 }
 
+// --- File Organizer ---------------------------------------------------------
+
+void testKindFromPath() {
+    using organizer::Kind;
+    using organizer::kindFromPath;
+    CHECK(kindFromPath("/s/a.JPG") == Kind::Photos);
+    CHECK(kindFromPath("/s/b.heic") == Kind::Photos);
+    CHECK(kindFromPath("/s/Kına ğ.JPG") == Kind::Photos);
+    CHECK(kindFromPath("/s/c.MP4") == Kind::Videos);
+    CHECK(kindFromPath("/s/d.mov") == Kind::Videos);
+    CHECK(kindFromPath("/s/e.mp3") == Kind::Music);
+    CHECK(kindFromPath("/s/f.PDF") == Kind::Documents);
+    CHECK(kindFromPath("/s/g") == Kind::Other);
+    CHECK(kindFromPath("/s/h.xyz") == Kind::Other);
+    CHECK(kindFromPath("/s/.DS_Store") == Kind::Other);
+    CHECK_EQ(std::string(organizer::kindName(Kind::Videos)), std::string("Videos"));
+}
+
+void testCategoryFromLabels() {
+    using organizer::PhotoCategory;
+    using organizer::categoryFromLabels;
+    CHECK(categoryFromLabels({}) == PhotoCategory::Other);
+    CHECK(categoryFromLabels({{"people", 0.98f}, {"adult", 0.95f}}) == PhotoCategory::People);
+    CHECK(categoryFromLabels({{"outdoor", 0.95f}, {"sky", 0.95f}, {"people", 0.79f}}) == PhotoCategory::People);
+    CHECK(categoryFromLabels({{"people", 0.79f}, {"dog", 0.37f}, {"animal", 0.37f}}) == PhotoCategory::People);
+    CHECK(categoryFromLabels({{"vehicle", 0.81f}, {"outdoor", 0.76f}, {"people", 0.4f}}) == PhotoCategory::Vehicles);
+    CHECK(categoryFromLabels({{"plant", 0.75f}, {"forest", 0.74f}}) == PhotoCategory::Nature);
+    CHECK(categoryFromLabels({{"people", 0.9f}, {"screenshot", 0.6f}}) == PhotoCategory::Screenshots);
+    CHECK(categoryFromLabels({{"receipt", 0.7f}}) == PhotoCategory::Documents);
+    CHECK(categoryFromLabels({{"curtain", 0.84f}, {"people", 0.49f}}) == PhotoCategory::Other);
+    CHECK_EQ(std::string(organizer::categoryName(PhotoCategory::Buildings)), std::string("Buildings"));
+}
+
+namespace {
+// 2023-07-15 12:00 UTC: July 2023 in every time zone.
+constexpr std::time_t kJuly2023 = 1689422400;
+const organizer::ExistsFn kNothingExists = [](const fs::path&) { return false; };
+
+organizer::FileMeta meta(const fs::path& path, std::optional<std::time_t> date = kJuly2023,
+                         organizer::PhotoCategory category = organizer::PhotoCategory::Other) {
+    return {path, organizer::kindFromPath(path), date, category};
+}
+} // namespace
+
+void testPlanPhotoPaths() {
+    const auto moves = organizer::planOrganize(
+        {meta("/s/x/Kına ğ.JPG", kJuly2023, organizer::PhotoCategory::Nature)}, "/d", kNothingExists);
+    CHECK_EQ(moves.size(), std::size_t{1});
+    CHECK_EQ(moves[0].from.string(), std::string("/s/x/Kına ğ.JPG"));
+    CHECK_EQ(moves[0].to.string(), std::string("/d/Photos/Nature/2023/2023-07/Kına ğ.JPG"));
+}
+
+void testPlanOtherKinds() {
+    const auto moves = organizer::planOrganize(
+        {meta("/s/v.mp4"), meta("/s/m.mp3"), meta("/s/f.pdf"), meta("/s/g"), meta("/s/nodate.mp4", std::nullopt)},
+        "/d", kNothingExists);
+    CHECK_EQ(moves.size(), std::size_t{4});
+    if (moves.size() == 4) {
+        CHECK_EQ(moves[0].to.string(), std::string("/d/Videos/2023/2023-07/v.mp4"));
+        CHECK_EQ(moves[1].to.string(), std::string("/d/Music/m.mp3"));
+        CHECK_EQ(moves[2].to.string(), std::string("/d/Documents/f.pdf"));
+        CHECK_EQ(moves[3].to.string(), std::string("/d/Other/g"));
+    }
+}
+
+void testPlanSkipsAlreadyPlaced() {
+    const fs::path placed = "/d/Photos/People/2023/2023-07/a.jpg";
+    const auto moves = organizer::planOrganize({meta(placed, kJuly2023, organizer::PhotoCategory::People)}, "/d",
+                                               [&](const fs::path& p) { return p == placed; });
+    CHECK(moves.empty());
+}
+
+void testPlanCollisions() {
+    const auto moves = organizer::planOrganize({meta("/s/a/IMG_1.jpg"), meta("/s/b/IMG_1.jpg")}, "/d", kNothingExists);
+    CHECK_EQ(moves.size(), std::size_t{2});
+    if (moves.size() == 2) {
+        CHECK_EQ(moves[0].to.string(), std::string("/d/Photos/Other/2023/2023-07/IMG_1.jpg"));
+        CHECK_EQ(moves[1].to.string(), std::string("/d/Photos/Other/2023/2023-07/IMG_1 (2).jpg"));
+    }
+    const fs::path taken = "/d/Photos/Other/2023/2023-07/IMG_1.jpg";
+    const auto onDisk =
+        organizer::planOrganize({meta("/s/a/IMG_1.jpg")}, "/d", [&](const fs::path& p) { return p == taken; });
+    CHECK_EQ(onDisk.size(), std::size_t{1});
+    if (!onDisk.empty()) {
+        CHECK_EQ(onDisk[0].to.string(), std::string("/d/Photos/Other/2023/2023-07/IMG_1 (2).jpg"));
+    }
+}
+
 int main() {
     testHumanReadableBytes();
 
@@ -1563,6 +1653,12 @@ int main() {
     testCliParsesBigFiles();
     testCliParsesPhotos();
     testCliParsesOptimize();
+    testKindFromPath();
+    testCategoryFromLabels();
+    testPlanPhotoPaths();
+    testPlanOtherKinds();
+    testPlanSkipsAlreadyPlaced();
+    testPlanCollisions();
 
     if (g_failures == 0) {
         std::cout << "All tests passed.\n";

@@ -656,8 +656,19 @@ NSImageView *imageViewWithoutIntrinsicSize() {
 }
 
 - (void)reloadChecks {
-    // The same photo may have a second row in the other section.
-    [self.outlineView reloadData];
+    // Update the boxes in place: reloadData would drop the selection and the
+    // scroll position. Rows scrolled in later are built from `checked`, and
+    // the same photo may have a second row in the other section.
+    NSOutlineView *outline = self.outlineView;
+    const NSInteger column = [outline columnWithIdentifier:kCheckColumn];
+    const NSRange visible = [outline rowsInRect:outline.visibleRect];
+    for (NSUInteger row = visible.location; row < NSMaxRange(visible); ++row) {
+        MCPhotoItem *item = [(MCPhotoNode *)[outline itemAtRow:(NSInteger)row] item];
+        NSButton *box = [outline viewAtColumn:column row:(NSInteger)row makeIfNecessary:NO];
+        if (item != nil && [box isKindOfClass:[NSButton class]]) {
+            box.state = [self.checked containsObject:item.identifier] ? NSControlStateValueOn : NSControlStateValueOff;
+        }
+    }
     [self updateTrashButton];
     [self showSummary];
 }

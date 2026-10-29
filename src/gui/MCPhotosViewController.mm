@@ -81,7 +81,7 @@ NSImageView *imageViewWithoutIntrinsicSize() {
 @end
 
 @interface MCPhotosViewController () <NSOutlineViewDataSource, NSOutlineViewDelegate, QLPreviewPanelDataSource,
-                                      QLPreviewPanelDelegate>
+                                      QLPreviewPanelDelegate, NSOpenSavePanelDelegate>
 
 @property(nonatomic, strong) MCPhotoModel *model;
 @property(nonatomic, copy) NSArray<MCPhotoItem *> *items;       // every analysed photo
@@ -742,6 +742,8 @@ NSImageView *imageViewWithoutIntrinsicSize() {
     panel.allowsMultipleSelection = NO;
     panel.message = @"Choose a backup folder outside the scanned folder.";
     panel.prompt = @"Back Up & Delete";
+    panel.directoryURL = [NSURL fileURLWithPath:self.scanRoot.stringByDeletingLastPathComponent isDirectory:YES];
+    panel.delegate = self;
 
     __weak MCPhotosViewController *weakSelf = self;
     [panel beginSheetModalForWindow:self.view.window
@@ -750,6 +752,24 @@ NSImageView *imageViewWithoutIntrinsicSize() {
                           [weakSelf removeItems:selected how:MCPhotoRemovalBackup backupFolder:panel.URL.path];
                       }
                   }];
+}
+
+/// Refuses a backup folder inside the scanned one while the panel is still
+/// open; the model checks again, but only after the user has committed.
+- (BOOL)panel:(id)sender validateURL:(NSURL *)url error:(NSError **)outError {
+    NSString *root = [NSURL fileURLWithPath:self.scanRoot].URLByResolvingSymlinksInPath.path;
+    NSString *chosen = url.URLByResolvingSymlinksInPath.path;
+    if (![chosen isEqualToString:root] && ![chosen hasPrefix:[root stringByAppendingString:@"/"]]) {
+        return YES;
+    }
+    if (outError != nullptr) {
+        *outError = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileWriteInvalidFileNameError userInfo:@{
+            NSLocalizedDescriptionKey : @"Choose a folder outside the scanned folder.",
+            NSLocalizedRecoverySuggestionErrorKey : [NSString stringWithFormat:
+                @"Backups inside %@ would be scanned again as duplicates.", root.lastPathComponent],
+        }];
+    }
+    return NO;
 }
 
 - (void)confirmPermanentDeleteOfItems:(NSArray<MCPhotoItem *> *)selected size:(unsigned long long)total {

@@ -8,6 +8,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace maccleaner::organizer {
@@ -36,12 +37,40 @@ constexpr float kMinLabelConfidence = 0.5f;
 // with a matching label at kMinLabelConfidence or more; else Other.
 PhotoCategory categoryFromLabels(const std::vector<Label>& labels);
 
+struct GeoPoint {
+    double latitude;
+    double longitude;
+};
+
 struct FileMeta {
     std::filesystem::path path;
     Kind kind = Kind::Other;
     std::optional<std::time_t> date; // capture date, or birth time when metadata has none
     PhotoCategory category = PhotoCategory::Other;
+    std::optional<GeoPoint> location; // photos with EXIF GPS
+    std::string country;              // from resolvePlaces; empty = unknown
+    std::string city;
 };
+
+// How photos are grouped under Photos/.
+enum class PhotoLayout : std::uint8_t { Content, Place };
+
+// Photos are clustered on a grid of this size (degrees, about 5 km) before
+// geocoding, so thousands of photos need only a few hundred lookups.
+constexpr double kGeoCellDegrees = 0.05;
+
+struct GeoCell {
+    int lat;
+    int lon;
+    auto operator<=>(const GeoCell&) const = default;
+};
+
+GeoCell cellOf(GeoPoint point);
+GeoPoint cellCenter(GeoCell cell);
+
+// `raw` made safe as one path component: '/' and ':' become '-', outer
+// spaces are trimmed; empty, "." and ".." give `fallback`.
+std::string folderName(std::string_view raw, std::string_view fallback);
 
 struct Move {
     std::filesystem::path from;
@@ -51,13 +80,16 @@ struct Move {
 using ExistsFn = std::function<bool(const std::filesystem::path& path)>;
 
 // Target of every file under `dest`:
-//   Photos/<Category>/YYYY/YYYY-MM/<name>, Videos/YYYY/YYYY-MM/<name>,
+//   Photos/<Category>/YYYY/YYYY-MM/<name> (Content layout), or
+//   Photos/<Country>/<City>/YYYY/YYYY-MM/<name> (Place layout; no country is
+//   "Unknown Place" with no city level, no city is "Unknown City"),
+//   Videos/YYYY/YYYY-MM/<name>,
 //   Music/<name>, Documents/<name>, Other/<name>  (dates in local time).
 // A file already at its target is left out, so a second run plans nothing.
 // Photos and videos without a date are left out. No two moves share a
 // target and no target `exists`: later files get "name (2).ext", "(3)", ...
 std::vector<Move> planOrganize(const std::vector<FileMeta>& files, const std::filesystem::path& dest,
-                               const ExistsFn& exists);
+                               const ExistsFn& exists, PhotoLayout layout = PhotoLayout::Content);
 
 // Moves one file, creating the parent folders of `to`. Never replaces an
 // existing `to`. Platform code: organizer_mac.mm / organizer_fallback.cpp.

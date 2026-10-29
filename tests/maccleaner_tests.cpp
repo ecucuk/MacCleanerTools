@@ -1539,7 +1539,12 @@ const organizer::ExistsFn kNothingExists = [](const fs::path&) { return false; }
 
 organizer::FileMeta meta(const fs::path& path, std::optional<std::time_t> date = kJuly2023,
                          organizer::PhotoCategory category = organizer::PhotoCategory::Other) {
-    return {path, organizer::kindFromPath(path), date, category};
+    organizer::FileMeta file;
+    file.path = path;
+    file.kind = organizer::kindFromPath(path);
+    file.date = date;
+    file.category = category;
+    return file;
 }
 } // namespace
 
@@ -1710,6 +1715,41 @@ void testOrganizeTwiceMovesNothing() {
     CHECK(second.empty());
 }
 
+void testCellOf() {
+    CHECK(organizer::cellOf({41.0082, 28.9784}) == organizer::cellOf({41.0101, 28.9799}));
+    CHECK(organizer::cellOf({41.0082, 28.9784}) != organizer::cellOf({41.0600, 28.9784}));
+    CHECK_EQ(organizer::cellOf({-33.9, 18.4}).lat, -678);
+    const organizer::GeoPoint center = organizer::cellCenter(organizer::cellOf({41.0082, 28.9784}));
+    CHECK(organizer::cellOf(center) == organizer::cellOf({41.0082, 28.9784}));
+}
+
+void testFolderName() {
+    CHECK_EQ(organizer::folderName("A/B: C ", "X"), std::string("A-B- C"));
+    CHECK_EQ(organizer::folderName("", "X"), std::string("X"));
+    CHECK_EQ(organizer::folderName("  ", "X"), std::string("X"));
+    CHECK_EQ(organizer::folderName("..", "X"), std::string("X"));
+    CHECK_EQ(organizer::folderName("İstanbul", "X"), std::string("İstanbul"));
+}
+
+void testPlanPlaceLayout() {
+    auto istanbul = meta("/s/a.jpg");
+    istanbul.location = organizer::GeoPoint{41.0, 29.0};
+    istanbul.country = "Turkey";
+    istanbul.city = "Istanbul";
+    auto noCity = meta("/s/c.jpg");
+    noCity.location = organizer::GeoPoint{39.0, 35.0};
+    noCity.country = "Turkey";
+    const auto moves = organizer::planOrganize({istanbul, meta("/s/b.jpg"), noCity, meta("/s/v.mp4")}, "/d",
+                                               kNothingExists, organizer::PhotoLayout::Place);
+    CHECK_EQ(moves.size(), std::size_t{4});
+    if (moves.size() == 4) {
+        CHECK_EQ(moves[0].to.string(), std::string("/d/Photos/Turkey/Istanbul/2023/2023-07/a.jpg"));
+        CHECK_EQ(moves[1].to.string(), std::string("/d/Photos/Unknown Place/2023/2023-07/b.jpg"));
+        CHECK_EQ(moves[2].to.string(), std::string("/d/Photos/Turkey/Unknown City/2023/2023-07/c.jpg"));
+        CHECK_EQ(moves[3].to.string(), std::string("/d/Videos/2023/2023-07/v.mp4"));
+    }
+}
+
 int main() {
     testHumanReadableBytes();
 
@@ -1808,6 +1848,9 @@ int main() {
     testScanFillsBirthTime();
     testScanSkipsOrganizedFolders();
     testOrganizeTwiceMovesNothing();
+    testCellOf();
+    testFolderName();
+    testPlanPlaceLayout();
 
     if (g_failures == 0) {
         std::cout << "All tests passed.\n";

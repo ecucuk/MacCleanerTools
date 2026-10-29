@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <set>
 #include <string_view>
 
@@ -96,6 +97,27 @@ PhotoCategory categoryFromLabels(const std::vector<Label>& labels) {
     return PhotoCategory::Other;
 }
 
+GeoCell cellOf(GeoPoint point) {
+    return {static_cast<int>(std::floor(point.latitude / kGeoCellDegrees)),
+            static_cast<int>(std::floor(point.longitude / kGeoCellDegrees))};
+}
+
+GeoPoint cellCenter(GeoCell cell) {
+    return {(cell.lat + 0.5) * kGeoCellDegrees, (cell.lon + 0.5) * kGeoCellDegrees};
+}
+
+std::string folderName(std::string_view raw, std::string_view fallback) {
+    std::string name(raw);
+    std::replace(name.begin(), name.end(), '/', '-');
+    std::replace(name.begin(), name.end(), ':', '-');
+    const auto first = name.find_first_not_of(' ');
+    if (first == std::string::npos) {
+        return std::string(fallback);
+    }
+    name = name.substr(first, name.find_last_not_of(' ') - first + 1);
+    return name == "." || name == ".." ? std::string(fallback) : name;
+}
+
 namespace {
 
 std::string formatLocal(std::time_t time, const char* format) {
@@ -105,10 +127,13 @@ std::string formatLocal(std::time_t time, const char* format) {
     return std::string(buffer, std::strftime(buffer, sizeof buffer, format, &local));
 }
 
-std::optional<fs::path> targetFolder(const FileMeta& file, const fs::path& dest) {
+std::optional<fs::path> targetFolder(const FileMeta& file, const fs::path& dest, PhotoLayout layout) {
     fs::path folder = dest / kindName(file.kind);
-    if (file.kind == Kind::Photos) {
+    if (file.kind == Kind::Photos && layout == PhotoLayout::Content) {
         folder /= categoryName(file.category);
+    } else if (file.kind == Kind::Photos) {
+        const std::string country = folderName(file.country, "");
+        folder = country.empty() ? folder / "Unknown Place" : folder / country / folderName(file.city, "Unknown City");
     }
     if (file.kind == Kind::Photos || file.kind == Kind::Videos) {
         if (!file.date) {
@@ -121,11 +146,12 @@ std::optional<fs::path> targetFolder(const FileMeta& file, const fs::path& dest)
 
 } // namespace
 
-std::vector<Move> planOrganize(const std::vector<FileMeta>& files, const fs::path& dest, const ExistsFn& exists) {
+std::vector<Move> planOrganize(const std::vector<FileMeta>& files, const fs::path& dest, const ExistsFn& exists,
+                               PhotoLayout layout) {
     std::vector<Move> moves;
     std::set<fs::path> taken;
     for (const FileMeta& file : files) {
-        const std::optional<fs::path> folder = targetFolder(file, dest);
+        const std::optional<fs::path> folder = targetFolder(file, dest, layout);
         if (!folder) {
             continue;
         }
@@ -219,7 +245,9 @@ std::vector<FileMeta> scanForOrganize(const fs::path& source, const fs::path& de
             if (name.empty() || name.front() == '.') {
                 return;
             }
-            FileMeta meta{path, kindFromPath(path), std::nullopt, PhotoCategory::Other};
+            FileMeta meta;
+            meta.path = path;
+            meta.kind = kindFromPath(path);
             read(meta);
             if (!meta.date) {
 #ifdef __APPLE__

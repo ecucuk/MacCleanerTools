@@ -78,6 +78,16 @@ void readPhoto(FileMeta& meta, NSURL* url) {
     if (!meta.date) {
         meta.date = parseExifDate(tiff[(__bridge NSString*)kCGImagePropertyTIFFDateTime]);
     }
+    NSDictionary* gps = properties[(__bridge NSString*)kCGImagePropertyGPSDictionary];
+    NSNumber* latitude = gps[(__bridge NSString*)kCGImagePropertyGPSLatitude];
+    NSNumber* longitude = gps[(__bridge NSString*)kCGImagePropertyGPSLongitude];
+    if ([latitude isKindOfClass:NSNumber.class] && [longitude isKindOfClass:NSNumber.class]) {
+        // EXIF stores magnitudes; the hemisphere is in the Ref fields.
+        const bool south = [gps[(__bridge NSString*)kCGImagePropertyGPSLatitudeRef] isEqual:@"S"];
+        const bool west = [gps[(__bridge NSString*)kCGImagePropertyGPSLongitudeRef] isEqual:@"W"];
+        meta.location = GeoPoint{south ? -latitude.doubleValue : latitude.doubleValue,
+                                 west ? -longitude.doubleValue : longitude.doubleValue};
+    }
 
     NSDictionary* options = @{
         (__bridge NSString*)kCGImageSourceCreateThumbnailFromImageAlways : @YES,

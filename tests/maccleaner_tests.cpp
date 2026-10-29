@@ -1461,6 +1461,69 @@ void testScanPhotoFolderReusesPrevious() {
     CHECK_EQ(changed.photos.size(), 2u);
 }
 
+#ifdef __APPLE__
+// Hand-written 24-bit BMP (ImageIO reads it; no encoder needed in the test).
+void writeTestBmp(const fs::path& file, int width, int height) {
+    const int rowBytes = (width * 3 + 3) & ~3;
+    const std::uint32_t pixelBytes = static_cast<std::uint32_t>(rowBytes * height);
+    std::vector<unsigned char> bmp(54 + pixelBytes, 0);
+    auto put32 = [&](std::size_t at, std::uint32_t v) {
+        for (std::size_t i = 0; i < 4; ++i) bmp[at + i] = static_cast<unsigned char>(v >> (8 * i));
+    };
+    bmp[0] = 'B';
+    bmp[1] = 'M';
+    put32(2, 54 + pixelBytes);
+    put32(10, 54);
+    put32(14, 40);
+    put32(18, static_cast<std::uint32_t>(width));
+    put32(22, static_cast<std::uint32_t>(height));
+    bmp[26] = 1;
+    bmp[28] = 24;
+    put32(34, pixelBytes);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            unsigned char* px = &bmp[54 + static_cast<std::size_t>(y * rowBytes + x * 3)];
+            px[0] = static_cast<unsigned char>(x * 4);
+            px[1] = static_cast<unsigned char>(y * 5);
+            px[2] = static_cast<unsigned char>((x ^ y) * 8);
+        }
+    }
+    std::ofstream(file, std::ios::binary).write(reinterpret_cast<const char*>(bmp.data()),
+                                                static_cast<std::streamsize>(bmp.size()));
+}
+
+void testWriteHeicCopy() {
+    SizedTree tree;
+    const fs::path source = tree.top() / "photo.bmp";
+    const fs::path heic = tree.top() / "photo.heic";
+    writeTestBmp(source, 64, 48);
+    const auto oldTime = fs::last_write_time(source) - std::chrono::hours(24 * 365);
+    fs::last_write_time(source, oldTime);
+
+    std::string error;
+    CHECK(photos::writeHeicCopy(source, heic, 0.8, error));
+    // NSDate is a double, so the copied time is exact to about a microsecond.
+    const auto drift = fs::last_write_time(heic) - oldTime;
+    CHECK(drift < std::chrono::milliseconds(1) && drift > -std::chrono::milliseconds(1));
+    photos::Decoded decoded;
+    CHECK(photos::decodeImageFile(heic, decoded));
+    CHECK_EQ(decoded.pixelWidth, 64);
+    CHECK_EQ(decoded.pixelHeight, 48);
+    CHECK(!fs::exists(tree.top() / "photo.heic.part"));
+
+    // Never replaces an existing file, and leaves no partial file behind.
+    std::ofstream(tree.top() / "taken.heic") << "keep";
+    CHECK(!photos::writeHeicCopy(source, tree.top() / "taken.heic", 0.8, error));
+    std::string kept;
+    std::ifstream(tree.top() / "taken.heic") >> kept;
+    CHECK_EQ(kept, std::string("keep"));
+    CHECK(!fs::exists(tree.top() / "taken.heic.part"));
+
+    CHECK(!photos::writeHeicCopy(tree.top() / "missing.jpg", tree.top() / "out.heic", 0.8, error));
+    CHECK(!fs::exists(tree.top() / "out.heic"));
+}
+#endif
+
 void testPhotoCacheRoundTrip() {
     SizedTree tree;
     const fs::path file = tree.top() / "scan.cache";
@@ -1544,6 +1607,9 @@ int main() {
     testScanPhotoFolderParallel();
     testScanPhotoFolderReusesPrevious();
     testPhotoCacheRoundTrip();
+#ifdef __APPLE__
+    testWriteHeicCopy();
+#endif
     testGroupMatchesBruteForce();
     testGroupNoPairs();
 

@@ -29,7 +29,8 @@ NS_ASSUME_NONNULL_BEGIN
 /// How removeFiles: gets rid of a photo file.
 typedef NS_ENUM(NSInteger, MCPhotoRemoval) {
     MCPhotoRemovalTrash,
-    /// Moves it into a backup folder, keeping its path relative to the scan root.
+    /// Moves it into a backup folder, keeping its path relative to the scan
+    /// root. JPEG, PNG and TIFF are stored as HEIC when that is smaller.
     MCPhotoRemovalBackup,
     /// Unlinks it. Cannot be undone.
     MCPhotoRemovalPermanent,
@@ -73,13 +74,15 @@ typedef NS_ENUM(NSInteger, MCPhotoRemoval) {
 /// Photos library guard). `backupFolder` is required for MCPhotoRemovalBackup
 /// and must lie outside `scanRoot`; an existing file there is never replaced.
 /// `progress` (~4 Hz) and `completion` run on main; `problems` holds one
-/// "name — reason" line per photo left in place. No-op while `busy`.
+/// "name — reason" line per photo left in place; `storedBytes` is what the
+/// backup folder gained. No-op while `busy`.
 - (void)removeFiles:(NSArray<NSString *> *)paths
       underScanRoot:(NSString *)scanRoot
                 how:(MCPhotoRemoval)how
        backupFolder:(nullable NSString *)backupFolder
            progress:(nullable void (^)(uint64_t done, NSString *current))progress
-         completion:(void (^)(NSSet<NSString *> *removed, NSArray<NSString *> *problems))completion;
+         completion:(void (^)(NSSet<NSString *> *removed, NSArray<NSString *> *problems,
+                              uint64_t storedBytes))completion;
 
 /// Deletes library assets through Photos, which shows its own confirmation.
 /// `completion` runs on main.

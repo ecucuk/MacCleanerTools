@@ -138,7 +138,10 @@ sharpest, then oldest — is labelled so you can see which one to keep. Both
 thresholds can be changed after a scan without rescanning. **Remove…** takes
 the checked folder photos away in the background, with progress and **Stop**:
 **Move to Trash**, **Back Up & Delete…** (moves them into a folder outside
-the scanned one, keeping their subfolders and never replacing a file there),
+the scanned one, keeping their subfolders and never replacing a file there;
+JPEG, PNG and TIFF are re-encoded as HEIC at quality 0.8 with their metadata
+and dates, which halved real JPEGs with no visible loss, and kept as they
+are when HEIC would not be smaller),
 or **Delete Permanently…** (asks again; Return cancels). Every photo first
 passes `isSafeToDelete()` with the scanned folder as the only allowed root.
 Library photos are deleted through Photos itself, which shows

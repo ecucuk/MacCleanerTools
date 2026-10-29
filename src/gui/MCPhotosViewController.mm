@@ -708,7 +708,8 @@ NSImageView *imageViewWithoutIntrinsicSize() {
     alert.alertStyle = NSAlertStyleWarning;
     alert.messageText = @"Remove the checked photos?";
     alert.informativeText = [NSString stringWithFormat:
-        @"%lu photo(s), %@. Back Up & Delete moves them into a folder you choose, keeping their subfolders.",
+        @"%lu photo(s), %@. Back Up & Delete moves them into a folder you choose, keeping their "
+        @"subfolders, and stores JPEG, PNG and TIFF as HEIC (about half the size).",
         (unsigned long)selected.count, humanSize(total)];
     [alert addButtonWithTitle:@"Move to Trash"];
     [alert addButtonWithTitle:@"Back Up & Delete…"];
@@ -791,8 +792,8 @@ NSImageView *imageViewWithoutIntrinsicSize() {
             weakSelf.statusLabel.stringValue =
                 [NSString stringWithFormat:@"%@ %llu of %lu · %@", verb, done + 1, (unsigned long)count, current];
         }
-        completion:^(NSSet<NSString *> *removed, NSArray<NSString *> *problems) {
-            [weakSelf finishRemovalOf:removed items:byPath how:how problems:problems];
+        completion:^(NSSet<NSString *> *removed, NSArray<NSString *> *problems, uint64_t storedBytes) {
+            [weakSelf finishRemovalOf:removed items:byPath how:how stored:storedBytes problems:problems];
         }];
     if (!self.model.busy) {
         return; // a scan is running
@@ -809,6 +810,7 @@ NSImageView *imageViewWithoutIntrinsicSize() {
 - (void)finishRemovalOf:(NSSet<NSString *> *)removed
                   items:(NSDictionary<NSString *, MCPhotoItem *> *)byPath
                     how:(MCPhotoRemoval)how
+                 stored:(uint64_t)stored
                problems:(NSArray<NSString *> *)problems {
     self.folderButton.enabled = YES;
     self.libraryButton.enabled = YES;
@@ -824,8 +826,11 @@ NSImageView *imageViewWithoutIntrinsicSize() {
     NSString *done = how == MCPhotoRemovalTrash ? @"Moved %lu photo(s) to Trash"
                      : how == MCPhotoRemovalBackup ? @"Backed up and removed %lu photo(s)"
                                                    : @"Deleted %lu photo(s)";
-    self.statusLabel.stringValue = [NSString stringWithFormat:@"%@ · freed %@%@",
-        [NSString stringWithFormat:done, (unsigned long)removed.count], humanSize(freed),
+    NSString *size = how == MCPhotoRemovalBackup
+                         ? [NSString stringWithFormat:@"%@ stored as %@", humanSize(freed), humanSize(stored)]
+                         : [NSString stringWithFormat:@"freed %@", humanSize(freed)];
+    self.statusLabel.stringValue = [NSString stringWithFormat:@"%@ · %@%@",
+        [NSString stringWithFormat:done, (unsigned long)removed.count], size,
         problems.count > 0 ? [NSString stringWithFormat:@" · %lu failed", (unsigned long)problems.count] : @""];
     if (problems.count == 0) {
         return;

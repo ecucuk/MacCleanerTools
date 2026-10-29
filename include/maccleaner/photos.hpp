@@ -85,6 +85,13 @@ bool decodeImageFile(const std::filesystem::path& path, Decoded& out);
 // non-Apple platforms. scanPhotoFolder reads sequentially ahead otherwise.
 bool isSolidStateVolume(const std::filesystem::path& path);
 
+// Re-encodes the image at `source` as HEIC at `destination`, keeping its
+// metadata (EXIF, orientation) and file dates. Never replaces an existing
+// file and leaves no partial file behind. `quality` is 0-1. Returns false
+// with `error` set on failure; the non-Apple fallback always fails.
+bool writeHeicCopy(const std::filesystem::path& source, const std::filesystem::path& destination, double quality,
+                   std::string& error);
+
 // Case-insensitive check against the still-image formats ImageIO reads
 // (JPEG, HEIF, PNG, TIFF, WebP and common camera RAW).
 bool isPhotoExtension(const std::filesystem::path& path);

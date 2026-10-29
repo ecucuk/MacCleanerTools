@@ -1,13 +1,19 @@
 // ImageIO decoder for the photo folder scan. ImageIO reads every format the
 // system does (JPEG, HEIF, PNG, TIFF, WebP, camera RAW) and can produce a
 // downscaled, orientation-corrected thumbnail without decoding the full
-// image, which keeps a scan of thousands of 12 MP photos fast.
+// image, which keeps a scan of thousands of 12 MP photos fast. The file
+// also tells the scan whether a folder sits on solid-state storage.
 
 #include "image_mac.h"
 
 #import <Foundation/Foundation.h>
+#import <IOKit/IOKitLib.h>
+#import <IOKit/storage/IOStorageDeviceCharacteristics.h>
 #import <ImageIO/ImageIO.h>
 
+#include <sys/mount.h>
+
+#include <cstring>
 #include <ctime>
 
 namespace maccleaner::photos {
@@ -90,6 +96,26 @@ bool decodeImageFile(const std::filesystem::path& path, Decoded& out) {
         CGImageRelease(thumbnail);
         return ok;
     }
+}
+
+bool isSolidStateVolume(const std::filesystem::path& path) {
+    struct statfs fs {};
+    if (::statfs(path.c_str(), &fs) != 0 || std::strncmp(fs.f_mntfromname, "/dev/", 5) != 0) {
+        return false;
+    }
+    io_service_t media =
+        IOServiceGetMatchingService(kIOMainPortDefault, IOBSDNameMatching(kIOMainPortDefault, 0, fs.f_mntfromname + 5));
+    if (media == IO_OBJECT_NULL) {
+        return false;
+    }
+    // The characteristics sit on the physical device, above the partition
+    // (and, for APFS, above the container) in the registry.
+    NSDictionary *characteristics = CFBridgingRelease(IORegistryEntrySearchCFProperty(
+        media, kIOServicePlane, CFSTR(kIOPropertyDeviceCharacteristicsKey), kCFAllocatorDefault,
+        kIORegistryIterateRecursively | kIORegistryIterateParents));
+    IOObjectRelease(media);
+    return [characteristics isKindOfClass:[NSDictionary class]] &&
+           [characteristics[@kIOPropertyMediumTypeKey] isEqual:@kIOPropertyMediumTypeSolidStateKey];
 }
 
 } // namespace maccleaner::photos

@@ -80,6 +80,11 @@ using DecodeFn = std::function<bool(const std::filesystem::path& path, Decoded& 
 // several threads at once.
 bool decodeImageFile(const std::filesystem::path& path, Decoded& out);
 
+// True when the volume holding `path` reports itself as solid state. False
+// when it is rotational or does not say (many USB bridges hide it), and on
+// non-Apple platforms. scanPhotoFolder reads sequentially ahead otherwise.
+bool isSolidStateVolume(const std::filesystem::path& path);
+
 // Case-insensitive check against the still-image formats ImageIO reads
 // (JPEG, HEIF, PNG, TIFF, WebP and common camera RAW).
 bool isPhotoExtension(const std::filesystem::path& path);

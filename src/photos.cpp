@@ -6,6 +6,8 @@
 #include <algorithm>
 #include <bit>
 #include <cctype>
+#include <fcntl.h>
+#include <unistd.h>
 #include <condition_variable>
 #include <cstring>
 #include <deque>
@@ -217,6 +219,13 @@ FolderScan scanPhotoFolder(const std::filesystem::path& root,
     // Decoding is ~all of the time (tens of ms per photo, more for large
     // HEIC), so workers decode while this thread walks. Results land in walk
     // order, so the output does not depend on thread timing.
+    //
+    // On a disk that is not known to be solid state, only one thread reads:
+    // it pulls each file into the page cache in walk order, a short window
+    // ahead of the workers, and workers decode only files already read.
+    // Parallel reads made a USB hard disk seek between files (16.9k photos,
+    // 43 GB: 1050 s, against 575 s with this). On an SSD the extra read cost
+    // ~25% (12 GB set: 26 s -> 33 s), so there the reader only paces.
     struct Job {
         std::filesystem::path path;
         struct stat st;
@@ -230,21 +239,55 @@ FolderScan scanPhotoFolder(const std::filesystem::path& root,
     std::mutex mutex;
     std::condition_variable wake;
     std::deque<Job> jobs; // a deque keeps claimed jobs in place while the walk appends
-    std::size_t next = 0;
+    std::size_t next = 0;      // first job no worker has claimed
+    std::size_t readAhead = 0; // jobs before this one are read (or reused)
     bool walkDone = false;
+    const unsigned workerCount = std::max(1u, std::thread::hardware_concurrency());
+    const std::size_t window = 2 * std::size_t{workerCount};
+    const bool readAheadFromDisk = !isSolidStateVolume(root);
     FolderScan scan;
     std::uint64_t done = 0;
 
     auto isCancelled = [cancelled] { return cancelled != nullptr && cancelled->load(std::memory_order_relaxed); };
+    auto readFiles = [&] {
+        std::vector<char> buffer(std::size_t{1} << 20);
+        std::unique_lock lock(mutex);
+        for (;;) {
+            wake.wait(lock, [&] {
+                return isCancelled() || (readAhead < jobs.size() ? readAhead < next + window : walkDone);
+            });
+            if (isCancelled() || readAhead == jobs.size()) {
+                wake.notify_all(); // workers waiting on this thread must see the end
+                return;
+            }
+            const Job& job = jobs[readAhead];
+            if (!job.decoded && readAheadFromDisk) {
+                lock.unlock();
+                const int fd = ::open(job.path.c_str(), O_RDONLY | O_CLOEXEC);
+                if (fd >= 0) {
+                    while (::read(fd, buffer.data(), buffer.size()) > 0) {
+                    }
+                    ::close(fd);
+                }
+                lock.lock();
+            }
+            ++readAhead;
+            wake.notify_all();
+        }
+    };
     auto work = [&] {
         std::unique_lock lock(mutex);
         for (;;) {
-            wake.wait(lock, [&] { return next < jobs.size() || walkDone; });
-            if (next == jobs.size() || isCancelled()) {
+            wake.wait(lock, [&] {
+                return isCancelled() || next < readAhead || (walkDone && readAhead == jobs.size());
+            });
+            if (isCancelled() || next == jobs.size()) {
+                wake.notify_all(); // the reader may wait for the window to move
                 return;
             }
             Job& job = jobs[next++];
             const bool reused = job.decoded;
+            wake.notify_all();
             lock.unlock();
 
             Decoded decoded;
@@ -277,10 +320,11 @@ FolderScan scanPhotoFolder(const std::filesystem::path& root,
         }
     };
 
-    std::vector<std::thread> workers(std::max(1u, std::thread::hardware_concurrency()));
+    std::vector<std::thread> workers(workerCount);
     for (std::thread& worker : workers) {
         worker = std::thread(work);
     }
+    std::thread reader(readFiles);
     walkFiles(
         root,
         [&](const std::filesystem::path& path, const struct stat& st) {
@@ -298,7 +342,7 @@ FolderScan scanPhotoFolder(const std::filesystem::path& root,
                 std::lock_guard lock(mutex);
                 jobs.push_back(std::move(job));
             }
-            wake.notify_one();
+            wake.notify_all();
         },
         cancelled, {}, [](const std::filesystem::path& dir) { return !safety::isInsidePhotosLibrary(dir); });
     {
@@ -306,6 +350,7 @@ FolderScan scanPhotoFolder(const std::filesystem::path& root,
         walkDone = true;
     }
     wake.notify_all();
+    reader.join();
     for (std::thread& worker : workers) {
         worker.join();
     }

@@ -10,4 +10,8 @@ bool decodeImageFile(const std::filesystem::path&, Decoded&) {
     return false;
 }
 
+bool isSolidStateVolume(const std::filesystem::path&) {
+    return false;
+}
+
 } // namespace maccleaner::photos

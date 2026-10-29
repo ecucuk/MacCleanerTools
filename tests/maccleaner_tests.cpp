@@ -1372,6 +1372,7 @@ void testScanPhotoFolderUsesDecoder() {
         CHECK_EQ(photo.sizeBytes, 1u);
         CHECK(photo.hash == photos::dHash(makeImage(64, 64, rampPixel)));
     }
+    CHECK(!photos::isSolidStateVolume("/no/such/volume"));
     CHECK(photos::isPhotoExtension("x.HEIC"));
     CHECK(!photos::isPhotoExtension("x.txt"));
 }

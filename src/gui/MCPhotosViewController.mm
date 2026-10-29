@@ -271,7 +271,7 @@ NSImageView *imageViewWithoutIntrinsicSize() {
     self.largePreviewButton.toolTip = @"Show the selected photo large (double-click or Space)";
     self.largePreviewButton.enabled = NO;
 
-    self.trashButton = [NSButton buttonWithTitle:@"Move to Trash…" target:self action:@selector(removeChecked:)];
+    self.trashButton = [NSButton buttonWithTitle:@"Remove…" target:self action:@selector(removeChecked:)];
     self.trashButton.enabled = NO;
 
     self.checkCopiesButton = [NSButton buttonWithTitle:@"Check Copies" target:self action:@selector(checkCopies:)];
@@ -368,7 +368,7 @@ NSImageView *imageViewWithoutIntrinsicSize() {
                       completion:^(NSArray<MCPhotoItem *> *items) {
                           MCPhotosViewController *strongSelf = weakSelf;
                           // The user may have started a scan of their own meanwhile.
-                          if (strongSelf == nil || items == nil || strongSelf.hasScanned || strongSelf.model.scanning) {
+                          if (strongSelf == nil || items == nil || strongSelf.hasScanned || strongSelf.model.busy) {
                               return;
                           }
                           strongSelf.sourceLabel.stringValue = [root stringByAbbreviatingWithTildeInPath];
@@ -387,12 +387,12 @@ NSImageView *imageViewWithoutIntrinsicSize() {
                                                      (unsigned long)groups, (unsigned long)blurry,
                                                      (unsigned long)self.items.count, self.sourceLabel.stringValue];
 
-    const BOOL presented = groups + blurry == 0 && (self.model.scanning || !self.hasScanned);
+    const BOOL presented = groups + blurry == 0 && (self.model.busy || !self.hasScanned);
     [self.hero setPresented:presented];
     if (!presented) {
         return;
     }
-    if (self.model.scanning) {
+    if (self.model.busy) {
         [self.hero showScanningWithStatus:@"Comparing photos and measuring sharpness…"];
     } else {
         [self.hero showIdleWithMessage:@"Scan asks for a folder of photos."];
@@ -433,7 +433,7 @@ NSImageView *imageViewWithoutIntrinsicSize() {
                 completion:^(NSArray<MCPhotoItem *> *items, NSUInteger skipped) {
                     [weakSelf finishScanWithItems:items skipped:skipped root:root];
                 }];
-    [self updateHero]; // after scanFolder:, so `scanning` is already set
+    [self updateHero]; // after scanFolder:, so `busy` is already set
 }
 
 - (void)scanLibrary:(id)sender {
@@ -589,7 +589,7 @@ NSImageView *imageViewWithoutIntrinsicSize() {
 }
 
 - (void)showSummary {
-    if (self.model.scanning) {
+    if (self.model.busy) {
         return;
     }
     self.statusLabel.stringValue = [NSString stringWithFormat:
@@ -663,9 +663,9 @@ NSImageView *imageViewWithoutIntrinsicSize() {
 }
 
 - (void)updateTrashButton {
-    self.checkCopiesButton.enabled = !self.model.scanning && self.groups.count > 0;
-    self.trashButton.title = self.scanRoot == nil && self.items.count > 0 ? @"Delete from Photos…" : @"Move to Trash…";
-    self.trashButton.enabled = !self.model.scanning && [self checkedItems].count > 0;
+    self.checkCopiesButton.enabled = !self.model.busy && self.groups.count > 0;
+    self.trashButton.title = self.scanRoot == nil && self.items.count > 0 ? @"Delete from Photos…" : @"Remove…";
+    self.trashButton.enabled = !self.model.busy && [self checkedItems].count > 0;
 }
 
 #pragma mark - Removal
@@ -706,51 +706,142 @@ NSImageView *imageViewWithoutIntrinsicSize() {
     }
     NSAlert *alert = [[NSAlert alloc] init];
     alert.alertStyle = NSAlertStyleWarning;
-    alert.messageText = @"Move the checked photos to the Trash?";
-    alert.informativeText = [NSString stringWithFormat:@"%lu photo(s), %@.", (unsigned long)selected.count,
-                                                        humanSize(total)];
+    alert.messageText = @"Remove the checked photos?";
+    alert.informativeText = [NSString stringWithFormat:
+        @"%lu photo(s), %@. Back Up & Delete moves them into a folder you choose, keeping their subfolders.",
+        (unsigned long)selected.count, humanSize(total)];
     [alert addButtonWithTitle:@"Move to Trash"];
+    [alert addButtonWithTitle:@"Back Up & Delete…"];
+    [alert addButtonWithTitle:@"Delete Permanently…"].hasDestructiveAction = YES;
     [alert addButtonWithTitle:@"Cancel"];
 
     __weak MCPhotosViewController *weakSelf = self;
     [alert beginSheetModalForWindow:self.view.window
                   completionHandler:^(NSModalResponse response) {
                       if (response == NSAlertFirstButtonReturn) {
-                          [weakSelf trashItems:selected];
+                          [weakSelf removeItems:selected how:MCPhotoRemovalTrash backupFolder:nil];
+                      } else if (response == NSAlertSecondButtonReturn) {
+                          // Let the sheet close before the panel takes its place.
+                          dispatch_async(dispatch_get_main_queue(), ^{
+                              [weakSelf chooseBackupFolderForItems:selected];
+                          });
+                      } else if (response == NSAlertThirdButtonReturn) {
+                          dispatch_async(dispatch_get_main_queue(), ^{
+                              [weakSelf confirmPermanentDeleteOfItems:selected size:total];
+                          });
                       }
                   }];
 }
 
-- (void)trashItems:(NSArray<MCPhotoItem *> *)selected {
-    NSMutableArray<NSString *> *problems = [NSMutableArray array];
-    NSMutableSet<NSString *> *removed = [NSMutableSet set];
-    unsigned long long freed = 0;
+- (void)chooseBackupFolderForItems:(NSArray<MCPhotoItem *> *)selected {
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    panel.canChooseFiles = NO;
+    panel.canChooseDirectories = YES;
+    panel.canCreateDirectories = YES;
+    panel.allowsMultipleSelection = NO;
+    panel.message = @"Choose a backup folder outside the scanned folder.";
+    panel.prompt = @"Back Up & Delete";
 
-    for (MCPhotoItem *item in selected) {
-        NSString *error = nil;
-        if ([self.model trashFileAtPath:item.identifier underScanRoot:self.scanRoot error:&error]) {
-            [removed addObject:item.identifier];
-            freed += item.sizeBytes;
-        } else {
-            [problems addObject:[NSString stringWithFormat:@"%@ — %@", item.name, error != nil ? error : @"unknown error"]];
+    __weak MCPhotosViewController *weakSelf = self;
+    [panel beginSheetModalForWindow:self.view.window
+                  completionHandler:^(NSModalResponse response) {
+                      if (response == NSModalResponseOK && panel.URL != nil) {
+                          [weakSelf removeItems:selected how:MCPhotoRemovalBackup backupFolder:panel.URL.path];
+                      }
+                  }];
+}
+
+- (void)confirmPermanentDeleteOfItems:(NSArray<MCPhotoItem *> *)selected size:(unsigned long long)total {
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.alertStyle = NSAlertStyleCritical;
+    alert.messageText = [NSString stringWithFormat:@"Permanently delete %lu photo(s)?", (unsigned long)selected.count];
+    alert.informativeText = [NSString stringWithFormat:@"%@ will be deleted. This cannot be undone.", humanSize(total)];
+    NSButton *cancel = [alert addButtonWithTitle:@"Cancel"];
+    NSButton *destroy = [alert addButtonWithTitle:@"Delete Permanently"];
+    destroy.hasDestructiveAction = YES;
+    // Return must not destroy anything.
+    cancel.keyEquivalent = @"\r";
+    destroy.keyEquivalent = @"";
+
+    __weak MCPhotosViewController *weakSelf = self;
+    [alert beginSheetModalForWindow:self.view.window
+                  completionHandler:^(NSModalResponse response) {
+                      if (response == NSAlertSecondButtonReturn) {
+                          [weakSelf removeItems:selected how:MCPhotoRemovalPermanent backupFolder:nil];
+                      }
+                  }];
+}
+
+/// Runs off the main thread like a scan: Stop and the spinner stay live, the
+/// other actions wait for the completion.
+- (void)removeItems:(NSArray<MCPhotoItem *> *)selected
+                how:(MCPhotoRemoval)how
+       backupFolder:(nullable NSString *)backupFolder {
+    NSArray<NSString *> *paths = [selected valueForKey:@"identifier"];
+    NSDictionary<NSString *, MCPhotoItem *> *byPath = [NSDictionary dictionaryWithObjects:selected forKeys:paths];
+    const NSUInteger count = selected.count;
+    NSString *verb = how == MCPhotoRemovalTrash ? @"Moving to Trash" : how == MCPhotoRemovalBackup ? @"Backing up" : @"Deleting";
+
+    __weak MCPhotosViewController *weakSelf = self;
+    [self.model removeFiles:paths
+        underScanRoot:self.scanRoot
+        how:how
+        backupFolder:backupFolder
+        progress:^(uint64_t done, NSString *current) {
+            weakSelf.statusLabel.stringValue =
+                [NSString stringWithFormat:@"%@ %llu of %lu · %@", verb, done + 1, (unsigned long)count, current];
         }
+        completion:^(NSSet<NSString *> *removed, NSArray<NSString *> *problems) {
+            [weakSelf finishRemovalOf:removed items:byPath how:how problems:problems];
+        }];
+    if (!self.model.busy) {
+        return; // a scan is running
     }
+    self.folderButton.enabled = NO;
+    self.libraryButton.enabled = NO;
+    self.stopButton.hidden = NO;
+    self.stopButton.enabled = YES;
+    [self.spinner startAnimation:nil];
+    self.statusLabel.stringValue = [NSString stringWithFormat:@"%@ %lu photo(s)…", verb, (unsigned long)count];
+    [self updateTrashButton];
+}
 
+- (void)finishRemovalOf:(NSSet<NSString *> *)removed
+                  items:(NSDictionary<NSString *, MCPhotoItem *> *)byPath
+                    how:(MCPhotoRemoval)how
+               problems:(NSArray<NSString *> *)problems {
+    self.folderButton.enabled = YES;
+    self.libraryButton.enabled = YES;
+    self.stopButton.hidden = YES;
+    [self.spinner stopAnimation:nil];
+
+    unsigned long long freed = 0;
+    for (NSString *path in removed) {
+        freed += byPath[path].sizeBytes;
+    }
     [self dropItemsWithIdentifiers:removed];
 
+    NSString *done = how == MCPhotoRemovalTrash ? @"Moved %lu photo(s) to Trash"
+                     : how == MCPhotoRemovalBackup ? @"Backed up and removed %lu photo(s)"
+                                                   : @"Deleted %lu photo(s)";
+    self.statusLabel.stringValue = [NSString stringWithFormat:@"%@ · freed %@%@",
+        [NSString stringWithFormat:done, (unsigned long)removed.count], humanSize(freed),
+        problems.count > 0 ? [NSString stringWithFormat:@" · %lu failed", (unsigned long)problems.count] : @""];
     if (problems.count == 0) {
-        self.statusLabel.stringValue = [NSString stringWithFormat:@"Moved %lu photo(s) to Trash · freed %@",
-                                                                    (unsigned long)removed.count, humanSize(freed)];
-    } else {
-        self.statusLabel.stringValue = [NSString stringWithFormat:@"Freed %@ · %lu failed", humanSize(freed),
-                                                                    (unsigned long)problems.count];
-        NSAlert *alert = [[NSAlert alloc] init];
-        alert.alertStyle = NSAlertStyleWarning;
-        alert.messageText = @"Some photos could not be moved to the Trash";
-        alert.informativeText = [problems componentsJoinedByString:@"\n"];
-        [alert addButtonWithTitle:@"OK"];
-        [alert beginSheetModalForWindow:self.view.window completionHandler:nil];
+        return;
     }
+    // Thousands of identical lines would make the sheet taller than the screen.
+    const NSUInteger shown = MIN(problems.count, (NSUInteger)15);
+    NSString *details = [[problems subarrayWithRange:NSMakeRange(0, shown)] componentsJoinedByString:@"\n"];
+    if (problems.count > shown) {
+        details = [details stringByAppendingFormat:@"\n… and %lu more", (unsigned long)(problems.count - shown)];
+    }
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.alertStyle = NSAlertStyleWarning;
+    alert.messageText = @"Some photos were left in place";
+    alert.informativeText = details;
+    [alert addButtonWithTitle:@"OK"];
+    [alert beginSheetModalForWindow:self.view.window completionHandler:nil];
 }
 
 /// Drops removed photos without rescanning.

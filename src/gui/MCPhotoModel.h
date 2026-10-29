@@ -26,13 +26,22 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface MCPhotoModel : NSObject
 
-/// YES between a scan call and its completion. Main-thread only.
-@property(nonatomic, readonly) BOOL scanning;
+/// How removeFiles: gets rid of a photo file.
+typedef NS_ENUM(NSInteger, MCPhotoRemoval) {
+    MCPhotoRemovalTrash,
+    /// Moves it into a backup folder, keeping its path relative to the scan root.
+    MCPhotoRemovalBackup,
+    /// Unlinks it. Cannot be undone.
+    MCPhotoRemovalPermanent,
+};
+
+/// YES between a scan or removal call and its completion. Main-thread only.
+@property(nonatomic, readonly) BOOL busy;
 
 /// Analyses every photo under `root` off the main thread. `progress` is
 /// throttled (~4 Hz) and runs on main; `completion` runs on main with every
 /// analysed photo and the number of photo files that could not be decoded.
-/// Starting a scan while `scanning` is a no-op.
+/// Starting a scan while `busy` is a no-op.
 - (void)scanFolder:(NSString *)root
           progress:(nullable void (^)(uint64_t done, NSString *current))progress
         completion:(void (^)(NSArray<MCPhotoItem *> *items, NSUInteger skipped))completion;
@@ -49,8 +58,8 @@ NS_ASSUME_NONNULL_BEGIN
                      completion:(void (^)(NSArray<MCPhotoItem *> *_Nullable items, NSUInteger skipped,
                                           NSString *_Nullable error))completion;
 
-/// Asks a running scan to stop; its completion still fires with what was
-/// analysed so far. No-op when idle.
+/// Asks a running scan or removal to stop; its completion still fires with
+/// what was done so far. No-op when idle.
 - (void)cancelScan;
 
 /// Duplicate groups of `items` at `maxDistance` (Hamming, 0-64). Element 0 of
@@ -59,11 +68,18 @@ NS_ASSUME_NONNULL_BEGIN
 - (NSArray<NSArray<MCPhotoItem *> *> *)groupsOfItems:(NSArray<MCPhotoItem *> *)items
                                          maxDistance:(NSInteger)maxDistance;
 
-/// Moves one file to the Trash after the same checks as Large Files, with the
-/// scanned folder as the only allowed root (plus the Photos library guard).
-- (BOOL)trashFileAtPath:(NSString *)path
-          underScanRoot:(NSString *)scanRoot
-                  error:(NSString *_Nullable *_Nullable)error;
+/// Removes folder photos off the main thread, each after the same checks as
+/// Large Files with the scanned folder as the only allowed root (plus the
+/// Photos library guard). `backupFolder` is required for MCPhotoRemovalBackup
+/// and must lie outside `scanRoot`; an existing file there is never replaced.
+/// `progress` (~4 Hz) and `completion` run on main; `problems` holds one
+/// "name — reason" line per photo left in place. No-op while `busy`.
+- (void)removeFiles:(NSArray<NSString *> *)paths
+      underScanRoot:(NSString *)scanRoot
+                how:(MCPhotoRemoval)how
+       backupFolder:(nullable NSString *)backupFolder
+           progress:(nullable void (^)(uint64_t done, NSString *current))progress
+         completion:(void (^)(NSSet<NSString *> *removed, NSArray<NSString *> *problems))completion;
 
 /// Deletes library assets through Photos, which shows its own confirmation.
 /// `completion` runs on main.

@@ -97,7 +97,7 @@ std::filesystem::path cacheFileForRoot(const std::string &root) {
     std::atomic<bool> _cancelled;
 }
 @property(nonatomic, strong) dispatch_queue_t workQueue;
-@property(nonatomic) BOOL scanning;
+@property(nonatomic) BOOL busy;
 @end
 
 @implementation MCPhotoModel
@@ -132,10 +132,10 @@ static void (^throttled(void (^progress)(uint64_t, NSString *)))(uint64_t, NSStr
 - (void)scanFolder:(NSString *)root
           progress:(nullable void (^)(uint64_t, NSString *))progress
         completion:(void (^)(NSArray<MCPhotoItem *> *, NSUInteger))completion {
-    if (self.scanning) {
+    if (self.busy) {
         return;
     }
-    self.scanning = YES;
+    self.busy = YES;
     _cancelled.store(false, std::memory_order_relaxed);
 
     std::string rootPath = root.UTF8String;
@@ -165,7 +165,7 @@ static void (^throttled(void (^progress)(uint64_t, NSString *)))(uint64_t, NSStr
         const NSUInteger skipped = static_cast<NSUInteger>(scan.undecodable);
 
         dispatch_async(dispatch_get_main_queue(), ^{
-            self.scanning = NO;
+            self.busy = NO;
             completion(items, skipped);
         });
     });
@@ -186,17 +186,17 @@ static void (^throttled(void (^progress)(uint64_t, NSString *)))(uint64_t, NSStr
 
 - (void)scanLibraryWithProgress:(nullable void (^)(uint64_t, NSString *))progress
                      completion:(void (^)(NSArray<MCPhotoItem *> *_Nullable, NSUInteger, NSString *_Nullable))completion {
-    if (self.scanning) {
+    if (self.busy) {
         return;
     }
-    self.scanning = YES;
+    self.busy = YES;
     _cancelled.store(false, std::memory_order_relaxed);
     void (^report)(uint64_t, NSString *) = throttled(progress);
 
     void (^finish)(NSArray<MCPhotoItem *> *, NSUInteger, NSString *) =
         ^(NSArray<MCPhotoItem *> *items, NSUInteger skipped, NSString *error) {
             dispatch_async(dispatch_get_main_queue(), ^{
-                self.scanning = NO;
+                self.busy = NO;
                 completion(items, skipped, error);
             });
         };
@@ -312,26 +312,93 @@ static void (^throttled(void (^progress)(uint64_t, NSString *)))(uint64_t, NSStr
     return groups;
 }
 
-- (BOOL)trashFileAtPath:(NSString *)path underScanRoot:(NSString *)scanRoot error:(NSString **)error {
-    safety::AllowedRoots allowed;
-    allowed.add(std::filesystem::path(scanRoot.UTF8String));
-
-    std::string reason;
-    if (!safety::isSafeToDelete(std::filesystem::path(path.UTF8String), allowed, &reason)) {
-        if (error != nullptr) {
-            *error = toNSString(reason);
-        }
-        return NO;
+- (void)removeFiles:(NSArray<NSString *> *)paths
+      underScanRoot:(NSString *)scanRoot
+                how:(MCPhotoRemoval)how
+       backupFolder:(nullable NSString *)backupFolder
+           progress:(nullable void (^)(uint64_t, NSString *))progress
+         completion:(void (^)(NSSet<NSString *> *, NSArray<NSString *> *))completion {
+    if (self.busy) {
+        return;
     }
+    self.busy = YES;
+    _cancelled.store(false, std::memory_order_relaxed);
+    void (^report)(uint64_t, NSString *) = throttled(progress);
+    std::atomic<bool> *cancelled = &_cancelled;
 
-    std::string trashError;
-    if (!trash::moveToTrash(std::filesystem::path(path.UTF8String), trashError)) {
-        if (error != nullptr) {
-            *error = toNSString(trashError);
+    dispatch_async(self.workQueue, ^{
+        namespace fs = std::filesystem;
+        NSMutableSet<NSString *> *removed = [NSMutableSet set];
+        NSMutableArray<NSString *> *problems = [NSMutableArray array];
+        const fs::path root(scanRoot.fileSystemRepresentation);
+        safety::AllowedRoots allowed;
+        allowed.add(root);
+
+        std::error_code ec;
+        const fs::path backup = backupFolder != nil ? fs::weakly_canonical(backupFolder.fileSystemRepresentation, ec)
+                                                    : fs::path();
+        const fs::path resolvedRoot = fs::weakly_canonical(root, ec);
+        const fs::path backupFromRoot = backup.lexically_relative(resolvedRoot);
+        NSArray<NSString *> *todo = paths;
+        if (how == MCPhotoRemovalBackup &&
+            (backup.empty() || backupFromRoot.empty() || *backupFromRoot.begin() != "..")) {
+            [problems addObject:@"The backup folder must be outside the scanned folder."];
+            todo = @[];
         }
-        return NO;
-    }
-    return YES;
+
+        uint64_t done = 0;
+        for (NSString *path in todo) {
+            if (cancelled->load(std::memory_order_relaxed)) {
+                break;
+            }
+            if (report != nil) {
+                report(done, path.lastPathComponent);
+            }
+            ++done;
+            const fs::path file(path.fileSystemRepresentation);
+            std::string reason;
+            if (safety::isSafeToDelete(file, allowed, &reason)) {
+                switch (how) {
+                case MCPhotoRemovalTrash:
+                    if (!trash::moveToTrash(file, reason) && reason.empty()) {
+                        reason = "could not move it to the Trash";
+                    }
+                    break;
+                case MCPhotoRemovalBackup: {
+                    const fs::path target = backup / file.lexically_relative(root);
+                    NSError *error = nil;
+                    fs::create_directories(target.parent_path(), ec);
+                    if (ec) {
+                        reason = ec.message();
+                    } else if (![NSFileManager.defaultManager
+                                   moveItemAtURL:[NSURL fileURLWithPath:path]
+                                           toURL:[NSURL fileURLWithFileSystemRepresentation:target.c_str()
+                                                                                isDirectory:NO
+                                                                              relativeToURL:nil]
+                                           error:&error]) {
+                        reason = error.localizedDescription.UTF8String;
+                    }
+                    break;
+                }
+                case MCPhotoRemovalPermanent:
+                    // remove, not remove_all: a photo is a file, never a tree.
+                    if (!fs::remove(file, ec)) {
+                        reason = ec ? ec.message() : "file vanished";
+                    }
+                    break;
+                }
+            }
+            if (reason.empty()) {
+                [removed addObject:path];
+            } else {
+                [problems addObject:[NSString stringWithFormat:@"%@ — %@", path.lastPathComponent, toNSString(reason)]];
+            }
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.busy = NO;
+            completion(removed, problems);
+        });
+    });
 }
 
 - (void)deleteLibraryAssets:(NSArray<NSString *> *)localIdentifiers

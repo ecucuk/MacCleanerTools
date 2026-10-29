@@ -135,9 +135,13 @@ shows it large: the Quick Look panel for folder photos (zoom, arrow through
 the selection), an image window for library photos. Library previews use
 what is stored on this Mac and never download from iCloud. Each group's **best copy** — most pixels, then
 sharpest, then oldest — is labelled so you can see which one to keep. Both
-thresholds can be changed after a scan without rescanning. Folder photos go
-to the Trash through `isSafeToDelete()` with the scanned folder as the only
-allowed root. Library photos are deleted through Photos itself, which shows
+thresholds can be changed after a scan without rescanning. **Remove…** takes
+the checked folder photos away in the background, with progress and **Stop**:
+**Move to Trash**, **Back Up & Delete…** (moves them into a folder outside
+the scanned one, keeping their subfolders and never replacing a file there),
+or **Delete Permanently…** (asks again; Return cancels). Every photo first
+passes `isSafeToDelete()` with the scanned folder as the only allowed root.
+Library photos are deleted through Photos itself, which shows
 its own confirmation and keeps them in *Recently Deleted* for 30 days;
 photos that are only in iCloud are never downloaded and count as skipped.
 
@@ -145,7 +149,7 @@ A folder scan is saved in `~/Library/Caches/com.maccleaner.app/photo-scans/`.
 Opening Photo Cleaner again shows the last folder at once, then rescans it
 in the background: deleted photos drop out, and only new files or files with
 a changed size or modification time are decoded again (the same applies to
-**Scan Folder…** on a folder scanned before). Moving to Trash stays off until
+**Scan Folder…** on a folder scanned before). **Remove…** stays off until
 that rescan is done.
 
 **Performance** samples your processes every two seconds and shows CPU %,

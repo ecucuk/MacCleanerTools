@@ -179,6 +179,23 @@ void testSafetyRejectsRootItself() {
     CHECK(!isSafeToDelete(tree.root(), allowed, &reason));
 }
 
+void testSafetyRejectsVolumesAndMountPoints() {
+    // Files inside an external volume may be deleted, but never /Volumes or a
+    // mount point itself (the guard fires before the ownership check).
+    AllowedRoots allowed;
+    allowed.add("/");
+    std::string reason;
+    CHECK(!isSafeToDelete("/Volumes", allowed, &reason));
+    CHECK(reason.find("mount point") != std::string::npos);
+    std::error_code ec;
+    for (fs::directory_iterator it("/Volumes", ec), end; !ec && it != end; it.increment(ec)) {
+        if (!it->is_symlink()) {
+            CHECK(!isSafeToDelete(it->path(), allowed, &reason));
+            CHECK(reason.find("mount point") != std::string::npos);
+        }
+    }
+}
+
 void testSafetyRejectsNonexistentPath() {
     ScratchTree tree;
     AllowedRoots allowed;
@@ -1488,6 +1505,7 @@ int main() {
     testSafetyRejectsPhotosLibrary();
     testSafetyRejectsSymlink();
     testSafetyRejectsRootItself();
+    testSafetyRejectsVolumesAndMountPoints();
     testSafetyRejectsNonexistentPath();
 
     testDirectorySizeSumsRecursively();

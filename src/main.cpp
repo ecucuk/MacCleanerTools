@@ -3,6 +3,7 @@
 #include "maccleaner/cli.hpp"
 #include "maccleaner/format.hpp"
 #include "maccleaner/optimizer.hpp"
+#include "maccleaner/organizer.hpp"
 #include "maccleaner/photos.hpp"
 #include "maccleaner/processes.hpp"
 #include "maccleaner/safety.hpp"
@@ -15,6 +16,7 @@
 #include <chrono>
 #include <cstdio>
 #include <iostream>
+#include <map>
 #include <thread>
 
 namespace {
@@ -107,6 +109,81 @@ int runBigFiles(const CliOptions& options) {
     std::cout << files.size() << " file(s), " << humanReadableBytes(total) << " total (threshold "
                << humanReadableBytes(scanOptions.minSizeBytes) << ", top " << scanOptions.maxResults << ")\n";
     return 0;
+}
+
+int runOrganize(const CliOptions& options) {
+    namespace fs = std::filesystem;
+    const fs::path source = options.under;
+    const fs::path dest = options.dest.empty() ? source : fs::path(options.dest);
+    std::error_code ec;
+    if (!fs::is_directory(source, ec) || ec) {
+        std::cerr << "error: not a directory: " << source.string() << "\n";
+        return 2;
+    }
+    std::string reason;
+    if (!organizer::isValidDestination(dest, &reason)) {
+        std::cerr << "error: " << reason << "\n";
+        return 1;
+    }
+
+    auto files = organizer::scanForOrganize(source, dest, nullptr, [](std::size_t seen) {
+        if (seen % 200 == 0) {
+            std::cerr << "\rRead " << seen << " file(s)..." << std::flush;
+        }
+    });
+    std::cerr << "\rRead " << files.size() << " file(s).    \n";
+    if (options.photoLayout == organizer::PhotoLayout::Place) {
+        organizer::resolvePlaces(files, homeDirectory() / "Library/Caches/MacCleaner/geocode.tsv", nullptr,
+                                 [](std::size_t done, std::size_t total) {
+                                     std::cerr << "\rLooked up " << done << "/" << total << " place(s)..." << std::flush;
+                                 });
+        std::cerr << "\n";
+    }
+    const auto moves = organizer::planOrganize(
+        files, dest, [](const fs::path& path) { std::error_code e; return fs::exists(path, e); }, options.photoLayout);
+
+    // "Photos/Nature", "Videos", ...: the first level that tells the groups apart.
+    std::map<std::string, std::size_t> groups;
+    for (const organizer::Move& move : moves) {
+        const fs::path relative = move.to.lexically_relative(dest);
+        auto part = relative.begin();
+        std::string group = part->string();
+        if (group == "Photos" && std::next(part) != relative.end()) {
+            group += "/" + std::next(part)->string();
+        }
+        ++groups[group];
+    }
+    for (const auto& [group, count] : groups) {
+        std::cout << "  " << count << "\t" << group << "\n";
+    }
+    for (std::size_t i = 0; i < moves.size() && i < 20; ++i) {
+        std::cout << "  " << moves[i].from.string() << " -> " << moves[i].to.string() << "\n";
+    }
+    std::cout << "================================\n";
+    std::cout << moves.size() << " of " << files.size() << " file(s) to move into " << dest.string() << "\n";
+    if (options.photoLayout == organizer::PhotoLayout::Place) {
+        if (const std::size_t waiting = organizer::countWaitingForPlace(files); waiting > 0) {
+            std::cout << waiting << " photo(s) stay where they are: their place lookup failed (offline?). "
+                      << "Run again later.\n";
+        }
+    }
+    if (!options.apply) {
+        std::cout << "Dry run. Pass --apply to move them.\n";
+        return 0;
+    }
+    if (moves.empty()) {
+        return 0;
+    }
+    if (!options.yes && !confirm("\nThis will move the files listed above. Continue?")) {
+        std::cout << "Aborted.\n";
+        return 1;
+    }
+    const organizer::ApplyResult result = organizer::applyPlan(moves, source);
+    for (const std::string& problem : result.problems) {
+        std::cout << "FAIL  " << problem << "\n";
+    }
+    std::cout << result.moved << " moved, " << result.problems.size() << " problem(s)\n";
+    return result.problems.empty() ? 0 : 1;
 }
 
 int runPhotos(const CliOptions& options) {
@@ -349,6 +426,8 @@ int main(int argc, char** argv) {
             return runPhotos(options);
         case Command::Optimize:
             return runOptimize(options);
+        case Command::Organize:
+            return runOrganize(options);
     }
     return 0;
 }

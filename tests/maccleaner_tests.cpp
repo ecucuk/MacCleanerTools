@@ -6,6 +6,7 @@
 #include "maccleaner/bigfiles.hpp"
 #include "maccleaner/cleaner.hpp"
 #include "maccleaner/optimizer.hpp"
+#include "maccleaner/organizer.hpp"
 #include "maccleaner/photos.hpp"
 #include "maccleaner/processes.hpp"
 #include "maccleaner/cli.hpp"
@@ -57,6 +58,7 @@ int g_failures = 0;
     } while (0)
 
 namespace fs = std::filesystem;
+namespace organizer = maccleaner::organizer;
 using maccleaner::humanReadableBytes;
 using maccleaner::safety::AllowedRoots;
 using maccleaner::safety::isSafeToDelete;
@@ -1560,6 +1562,453 @@ void testPhotoCacheRoundTrip() {
     CHECK(!photos::loadPhotoCache(file, "/x", loaded));
 }
 
+// --- File Organizer ---------------------------------------------------------
+
+void testKindFromPath() {
+    using organizer::Kind;
+    using organizer::kindFromPath;
+    CHECK(kindFromPath("/s/a.JPG") == Kind::Photos);
+    CHECK(kindFromPath("/s/b.heic") == Kind::Photos);
+    CHECK(kindFromPath("/s/Kına ğ.JPG") == Kind::Photos);
+    CHECK(kindFromPath("/s/c.MP4") == Kind::Videos);
+    CHECK(kindFromPath("/s/d.mov") == Kind::Videos);
+    CHECK(kindFromPath("/s/e.mp3") == Kind::Music);
+    CHECK(kindFromPath("/s/f.PDF") == Kind::Documents);
+    CHECK(kindFromPath("/s/g") == Kind::Other);
+    CHECK(kindFromPath("/s/h.xyz") == Kind::Other);
+    CHECK(kindFromPath("/s/.DS_Store") == Kind::Other);
+    CHECK_EQ(std::string(organizer::kindName(Kind::Videos)), std::string("Videos"));
+}
+
+void testCategoryFromLabels() {
+    using organizer::PhotoCategory;
+    using organizer::categoryFromLabels;
+    CHECK(categoryFromLabels({}) == PhotoCategory::Other);
+    CHECK(categoryFromLabels({{"people", 0.98f}, {"adult", 0.95f}}) == PhotoCategory::People);
+    CHECK(categoryFromLabels({{"outdoor", 0.95f}, {"sky", 0.95f}, {"people", 0.79f}}) == PhotoCategory::People);
+    CHECK(categoryFromLabels({{"people", 0.79f}, {"dog", 0.37f}, {"animal", 0.37f}}) == PhotoCategory::People);
+    CHECK(categoryFromLabels({{"vehicle", 0.81f}, {"outdoor", 0.76f}, {"people", 0.4f}}) == PhotoCategory::Vehicles);
+    CHECK(categoryFromLabels({{"plant", 0.75f}, {"forest", 0.74f}}) == PhotoCategory::Nature);
+    CHECK(categoryFromLabels({{"people", 0.9f}, {"screenshot", 0.6f}}) == PhotoCategory::Screenshots);
+    CHECK(categoryFromLabels({{"receipt", 0.7f}}) == PhotoCategory::Documents);
+    CHECK(categoryFromLabels({{"curtain", 0.84f}, {"people", 0.49f}}) == PhotoCategory::Other);
+    CHECK_EQ(std::string(organizer::categoryName(PhotoCategory::Buildings)), std::string("Buildings"));
+}
+
+namespace {
+// 2023-07-15 12:00 UTC: July 2023 in every time zone.
+constexpr std::time_t kJuly2023 = 1689422400;
+const organizer::ExistsFn kNothingExists = [](const fs::path&) { return false; };
+
+organizer::FileMeta meta(const fs::path& path, std::optional<std::time_t> date = kJuly2023,
+                         organizer::PhotoCategory category = organizer::PhotoCategory::Other) {
+    organizer::FileMeta file;
+    file.path = path;
+    file.kind = organizer::kindFromPath(path);
+    file.date = date;
+    file.category = category;
+    return file;
+}
+} // namespace
+
+void testPlanPhotoPaths() {
+    const auto moves = organizer::planOrganize(
+        {meta("/s/x/Kına ğ.JPG", kJuly2023, organizer::PhotoCategory::Nature)}, "/d", kNothingExists);
+    CHECK_EQ(moves.size(), std::size_t{1});
+    CHECK_EQ(moves[0].from.string(), std::string("/s/x/Kına ğ.JPG"));
+    CHECK_EQ(moves[0].to.string(), std::string("/d/Photos/Nature/2023/2023-07/Kına ğ.JPG"));
+}
+
+void testPlanOtherKinds() {
+    const auto moves = organizer::planOrganize(
+        {meta("/s/v.mp4"), meta("/s/m.mp3"), meta("/s/f.pdf"), meta("/s/g"), meta("/s/nodate.mp4", std::nullopt)},
+        "/d", kNothingExists);
+    CHECK_EQ(moves.size(), std::size_t{4});
+    if (moves.size() == 4) {
+        CHECK_EQ(moves[0].to.string(), std::string("/d/Videos/2023/2023-07/v.mp4"));
+        CHECK_EQ(moves[1].to.string(), std::string("/d/Music/m.mp3"));
+        CHECK_EQ(moves[2].to.string(), std::string("/d/Documents/f.pdf"));
+        CHECK_EQ(moves[3].to.string(), std::string("/d/Other/g"));
+    }
+}
+
+void testPlanSkipsAlreadyPlaced() {
+    const fs::path placed = "/d/Photos/People/2023/2023-07/a.jpg";
+    const auto moves = organizer::planOrganize({meta(placed, kJuly2023, organizer::PhotoCategory::People)}, "/d",
+                                               [&](const fs::path& p) { return p == placed; });
+    CHECK(moves.empty());
+}
+
+void testPlanCollisions() {
+    const auto moves = organizer::planOrganize({meta("/s/a/IMG_1.jpg"), meta("/s/b/IMG_1.jpg")}, "/d", kNothingExists);
+    CHECK_EQ(moves.size(), std::size_t{2});
+    if (moves.size() == 2) {
+        CHECK_EQ(moves[0].to.string(), std::string("/d/Photos/Other/2023/2023-07/IMG_1.jpg"));
+        CHECK_EQ(moves[1].to.string(), std::string("/d/Photos/Other/2023/2023-07/IMG_1 (2).jpg"));
+    }
+    const fs::path taken = "/d/Photos/Other/2023/2023-07/IMG_1.jpg";
+    const auto onDisk =
+        organizer::planOrganize({meta("/s/a/IMG_1.jpg")}, "/d", [&](const fs::path& p) { return p == taken; });
+    CHECK_EQ(onDisk.size(), std::size_t{1});
+    if (!onDisk.empty()) {
+        CHECK_EQ(onDisk[0].to.string(), std::string("/d/Photos/Other/2023/2023-07/IMG_1 (2).jpg"));
+    }
+}
+
+namespace {
+std::string readAll(const fs::path& path) {
+    std::ifstream in(path);
+    return std::string(std::istreambuf_iterator<char>(in), {});
+}
+} // namespace
+
+void testApplyMovesFiles() {
+    ScratchTree tree;
+    std::ofstream(tree.root() / "a.jpg") << "a";
+    const fs::path dest = tree.root() / "Photos/Other/2023/2023-07";
+    const auto result = organizer::applyPlan(
+        {{tree.root() / "a.jpg", dest / "a.jpg"}, {tree.root() / "child_file.txt", tree.root() / "Documents/child_file.txt"}},
+        tree.root());
+    CHECK_EQ(result.moved, std::size_t{2});
+    CHECK(result.problems.empty());
+    CHECK(!fs::exists(tree.root() / "a.jpg"));
+    CHECK_EQ(readAll(dest / "a.jpg"), std::string("a"));
+    CHECK(fs::exists(tree.root() / "Documents/child_file.txt"));
+}
+
+void testApplyRefusesOutsideSource() {
+    ScratchTree tree;
+    const auto result =
+        organizer::applyPlan({{tree.outside() / "secret.txt", tree.root() / "Documents/secret.txt"}}, tree.root());
+    CHECK_EQ(result.moved, std::size_t{0});
+    CHECK_EQ(result.problems.size(), std::size_t{1});
+    CHECK(fs::exists(tree.outside() / "secret.txt"));
+    CHECK(!fs::exists(tree.root() / "Documents/secret.txt"));
+}
+
+void testApplyNeverOverwrites() {
+    ScratchTree tree;
+    fs::create_directories(tree.root() / "Documents");
+    std::ofstream(tree.root() / "Documents/child_file.txt") << "keep";
+    const auto result =
+        organizer::applyPlan({{tree.root() / "child_file.txt", tree.root() / "Documents/child_file.txt"}}, tree.root());
+    CHECK_EQ(result.moved, std::size_t{0});
+    CHECK_EQ(result.problems.size(), std::size_t{1});
+    CHECK(fs::exists(tree.root() / "child_file.txt"));
+    CHECK_EQ(readAll(tree.root() / "Documents/child_file.txt"), std::string("keep"));
+}
+
+void testApplyReportsMissingSource() {
+    ScratchTree tree;
+    std::ofstream(tree.root() / "gone.txt") << "x";
+    fs::remove(tree.root() / "gone.txt");
+    const auto result = organizer::applyPlan({{tree.root() / "gone.txt", tree.root() / "Documents/gone.txt"},
+                                              {tree.root() / "child_file.txt", tree.root() / "Documents/child_file.txt"}},
+                                             tree.root());
+    CHECK_EQ(result.moved, std::size_t{1});
+    CHECK_EQ(result.problems.size(), std::size_t{1});
+    CHECK(fs::exists(tree.root() / "Documents/child_file.txt"));
+}
+
+void testIsValidDestination() {
+    const char* home = std::getenv("HOME");
+    const fs::path homeDir = home != nullptr ? home : "/Users/nobody";
+    std::string reason;
+    CHECK(!organizer::isValidDestination("", &reason));
+    CHECK(!organizer::isValidDestination("/System/x", &reason));
+    CHECK(!reason.empty());
+    CHECK(!organizer::isValidDestination(homeDir / "Pictures/P.photoslibrary/x", &reason));
+    CHECK(organizer::isValidDestination(homeDir / "Org", &reason));
+}
+
+namespace {
+const organizer::MetadataFn kNoMetadata = [](organizer::FileMeta&) {};
+
+std::vector<std::string> relativePaths(const std::vector<organizer::FileMeta>& files, const fs::path& root) {
+    std::vector<std::string> out;
+    for (const auto& file : files) {
+        out.push_back(file.path.lexically_relative(root).string());
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+} // namespace
+
+void testScanFillsBirthTime() {
+    ScratchTree tree;
+    const auto files = organizer::scanForOrganize(tree.root(), tree.root(), nullptr, {}, kNoMetadata);
+    CHECK_EQ(files.size(), std::size_t{1});
+    if (files.size() == 1) {
+        struct stat st {};
+        CHECK(::stat((tree.root() / "child_file.txt").c_str(), &st) == 0);
+        CHECK(files[0].kind == organizer::Kind::Documents);
+        CHECK(files[0].date.has_value());
+#ifdef __APPLE__
+        CHECK(files[0].date == st.st_birthtimespec.tv_sec);
+#endif
+    }
+}
+
+void testScanSkipsOrganizedFolders() {
+    ScratchTree tree;
+    const fs::path root = tree.root();
+    fs::remove(root / "child_file.txt");
+    for (const char* name : {"Photos/x.jpg", ".hidden/y.jpg", ".z.jpg", "A.app/c.jpg", "L.photoslibrary/d.jpg",
+                             "sub/e.jpg", "sub/Photos/f.jpg"}) {
+        writeFileOfSize(root / name, 1);
+    }
+    const auto files = organizer::scanForOrganize(root, root, nullptr, {}, kNoMetadata);
+    // Only kind folders directly under the destination are skipped.
+    CHECK(relativePaths(files, root) == (std::vector<std::string>{"sub/Photos/f.jpg", "sub/e.jpg"}));
+}
+
+void testOrganizeTwiceMovesNothing() {
+    ScratchTree tree;
+    const fs::path root = tree.root();
+    writeFileOfSize(root / "a/IMG_1.jpg", 1);
+    writeFileOfSize(root / "b/IMG_1.jpg", 1);
+    writeFileOfSize(root / "song.mp3", 1);
+    const auto exists = [](const fs::path& p) { return fs::exists(p); };
+    const auto first = organizer::planOrganize(organizer::scanForOrganize(root, root, nullptr, {}, kNoMetadata), root, exists);
+    CHECK_EQ(first.size(), std::size_t{4});
+    const auto applied = organizer::applyPlan(first, root);
+    CHECK_EQ(applied.moved, std::size_t{4});
+    CHECK(applied.problems.empty());
+    const auto second = organizer::planOrganize(organizer::scanForOrganize(root, root, nullptr, {}, kNoMetadata), root, exists);
+    CHECK(second.empty());
+}
+
+void testCellOf() {
+    CHECK(organizer::cellOf({41.0082, 28.9784}) == organizer::cellOf({41.0101, 28.9799}));
+    CHECK(organizer::cellOf({41.0082, 28.9784}) != organizer::cellOf({41.0600, 28.9784}));
+    CHECK_EQ(organizer::cellOf({-33.9, 18.4}).lat, -678);
+    const organizer::GeoPoint center = organizer::cellCenter(organizer::cellOf({41.0082, 28.9784}));
+    CHECK(organizer::cellOf(center) == organizer::cellOf({41.0082, 28.9784}));
+}
+
+void testFolderName() {
+    CHECK_EQ(organizer::folderName("A/B: C ", "X"), std::string("A-B- C"));
+    CHECK_EQ(organizer::folderName("", "X"), std::string("X"));
+    CHECK_EQ(organizer::folderName("  ", "X"), std::string("X"));
+    CHECK_EQ(organizer::folderName("..", "X"), std::string("X"));
+    CHECK_EQ(organizer::folderName("İstanbul", "X"), std::string("İstanbul"));
+}
+
+void testPlanPlaceLayout() {
+    auto istanbul = meta("/s/a.jpg");
+    istanbul.location = organizer::GeoPoint{41.0, 29.0};
+    istanbul.country = "Turkey";
+    istanbul.province = "Istanbul";
+    istanbul.city = "Kartal";
+    istanbul.placeResolved = true;
+    auto noCity = meta("/s/c.jpg");
+    noCity.location = organizer::GeoPoint{39.0, 35.0};
+    noCity.country = "Turkey";
+    noCity.province = "Ankara";
+    noCity.placeResolved = true;
+    const auto moves = organizer::planOrganize({istanbul, meta("/s/b.jpg"), noCity, meta("/s/v.mp4")}, "/d",
+                                               kNothingExists, organizer::PhotoLayout::Place);
+    CHECK_EQ(moves.size(), std::size_t{4});
+    if (moves.size() == 4) {
+        CHECK_EQ(moves[0].to.string(), std::string("/d/Photos/Turkey/Istanbul/Kartal/2023/2023-07/a.jpg"));
+        CHECK_EQ(moves[1].to.string(), std::string("/d/Photos/Unknown Place/2023/2023-07/b.jpg"));
+        CHECK_EQ(moves[2].to.string(), std::string("/d/Photos/Turkey/Ankara/Unknown City/2023/2023-07/c.jpg"));
+        CHECK_EQ(moves[3].to.string(), std::string("/d/Videos/2023/2023-07/v.mp4"));
+    }
+}
+
+namespace {
+organizer::FileMeta photoAt(const char* path, double lat, double lon) {
+    auto file = meta(path);
+    file.location = organizer::GeoPoint{lat, lon};
+    return file;
+}
+
+struct FakeGeocoder {
+    std::vector<organizer::GeocodeStatus> script; // returned in order; then Found
+    std::size_t calls = 0;
+    std::vector<long long> sleeps;
+
+    organizer::GeocodeFn geocode() {
+        return [this](organizer::GeoPoint, organizer::Place& place) {
+            const auto status = calls < script.size() ? script[calls] : organizer::GeocodeStatus::Found;
+            ++calls;
+            if (status == organizer::GeocodeStatus::Found) {
+                place = {"Turkey", "Istanbul", "Kartal"};
+            }
+            return status;
+        };
+    }
+    std::function<void(std::chrono::milliseconds)> sleep() {
+        return [this](std::chrono::milliseconds ms) { sleeps.push_back(ms.count()); };
+    }
+};
+} // namespace
+
+void testResolvePlacesGroupsCells() {
+    ScratchTree tree;
+    std::vector<organizer::FileMeta> files = {photoAt("/s/a.jpg", 41.0082, 28.9784),
+                                              photoAt("/s/b.jpg", 41.0101, 28.9799),
+                                              photoAt("/s/c.jpg", 39.92, 32.85), meta("/s/d.jpg")};
+    FakeGeocoder fake;
+    organizer::resolvePlaces(files, tree.root() / "geo.tsv", nullptr, {}, fake.geocode(), fake.sleep());
+    CHECK_EQ(fake.calls, std::size_t{2});
+    CHECK_EQ(files[0].province, std::string("Istanbul"));
+    CHECK_EQ(files[0].city, std::string("Kartal"));
+    CHECK_EQ(files[2].country, std::string("Turkey"));
+    CHECK(files[3].country.empty());
+}
+
+void testResolvePlacesUsesCache() {
+    ScratchTree tree;
+    std::vector<organizer::FileMeta> files = {photoAt("/s/a.jpg", 41.0082, 28.9784)};
+    FakeGeocoder first;
+    organizer::resolvePlaces(files, tree.root() / "geo.tsv", nullptr, {}, first.geocode(), first.sleep());
+    std::vector<organizer::FileMeta> again = {photoAt("/s/a.jpg", 41.0082, 28.9784)};
+    FakeGeocoder second;
+    organizer::resolvePlaces(again, tree.root() / "geo.tsv", nullptr, {}, second.geocode(), second.sleep());
+    CHECK_EQ(second.calls, std::size_t{0});
+    CHECK_EQ(again[0].city, std::string("Kartal"));
+}
+
+void testResolvePlacesRetriesThrottled() {
+    ScratchTree tree;
+    std::vector<organizer::FileMeta> files = {photoAt("/s/a.jpg", 41.0082, 28.9784)};
+    FakeGeocoder fake;
+    fake.script = {organizer::GeocodeStatus::Throttled};
+    organizer::resolvePlaces(files, tree.root() / "geo.tsv", nullptr, {}, fake.geocode(), fake.sleep());
+    CHECK_EQ(fake.calls, std::size_t{2});
+    CHECK(std::accumulate(fake.sleeps.begin(), fake.sleeps.end(), 0LL) >= 60000);
+    CHECK_EQ(files[0].city, std::string("Kartal"));
+}
+
+void testResolvePlacesSkipsFailedInCache() {
+    ScratchTree tree;
+    std::vector<organizer::FileMeta> files = {photoAt("/s/a.jpg", 41.0082, 28.9784), photoAt("/s/n.jpg", 0.01, 0.01)};
+    FakeGeocoder fake;
+    fake.script = {organizer::GeocodeStatus::Failed, organizer::GeocodeStatus::NotFound};
+    organizer::resolvePlaces(files, tree.root() / "geo.tsv", nullptr, {}, fake.geocode(), fake.sleep());
+    CHECK(files[0].country.empty());
+    FakeGeocoder again;
+    organizer::resolvePlaces(files, tree.root() / "geo.tsv", nullptr, {}, again.geocode(), again.sleep());
+    // The failed cell is asked again; the NotFound cell is cached.
+    CHECK_EQ(again.calls, std::size_t{1});
+}
+
+// --- review fixes -----------------------------------------------------------
+
+void testScanSkipsPackages() {
+    ScratchTree tree;
+    const fs::path root = tree.root();
+    fs::remove(root / "child_file.txt");
+    for (const char* name : {"X.imovielibrary/Original Media/a.mov", "Deck.KEY/Data/b.jpg", "Notes.rtfd/c.png",
+                             "Cat.lrdata/d.jpg", "23.10.2021 Kına/e.jpg"}) {
+        writeFileOfSize(root / name, 1);
+    }
+    const auto files = organizer::scanForOrganize(root, root, nullptr, {}, kNoMetadata);
+    // Packages stay whole; a dotted folder name that is not a package is entered.
+    CHECK(relativePaths(files, root) == (std::vector<std::string>{"23.10.2021 Kına/e.jpg"}));
+}
+
+void testScanSkipsKindFoldersAnyCase() {
+    ScratchTree tree;
+    const fs::path root = tree.root();
+    fs::remove(root / "child_file.txt");
+    writeFileOfSize(root / "music/a.mp3", 1);
+    writeFileOfSize(root / "PHOTOS/b.jpg", 1);
+    CHECK(organizer::scanForOrganize(root, root, nullptr, {}, kNoMetadata).empty());
+}
+
+void testPlanCollisionsIgnoreCase() {
+    const auto moves =
+        organizer::planOrganize({meta("/s/a/IMG_1.JPG"), meta("/s/b/img_1.jpg")}, "/d", kNothingExists);
+    CHECK_EQ(moves.size(), std::size_t{2});
+    if (moves.size() == 2) {
+        CHECK_EQ(moves[1].to.string(), std::string("/d/Photos/Other/2023/2023-07/img_1 (2).jpg"));
+    }
+    // Already in place apart from letter case: a case-insensitive disk sees the same file.
+    const auto placed = organizer::planOrganize({meta("/d/photos/other/2023/2023-07/a.jpg")}, "/d",
+                                                [](const fs::path&) { return true; });
+    CHECK(placed.empty());
+}
+
+void testPlanHoldsUnresolvedPlaces() {
+    ScratchTree tree;
+    std::vector<organizer::FileMeta> files = {photoAt("/s/a.jpg", 41.0082, 28.9784), meta("/s/b.jpg")};
+    FakeGeocoder fake;
+    fake.script = {organizer::GeocodeStatus::Failed};
+    organizer::resolvePlaces(files, tree.root() / "geo.tsv", nullptr, {}, fake.geocode(), fake.sleep());
+    CHECK(!files[0].placeResolved);
+    const auto moves = organizer::planOrganize(files, "/d", kNothingExists, organizer::PhotoLayout::Place);
+    // The photo whose lookup failed waits for the next run instead of landing in Unknown Place.
+    CHECK_EQ(moves.size(), std::size_t{1});
+    if (moves.size() == 1) {
+        CHECK_EQ(moves[0].from.string(), std::string("/s/b.jpg"));
+    }
+    // The content layout does not need places.
+    CHECK_EQ(organizer::planOrganize(files, "/d", kNothingExists).size(), std::size_t{2});
+}
+
+void testResolvePlacesCancelStopsThrottlePause() {
+    ScratchTree tree;
+    std::vector<organizer::FileMeta> files = {photoAt("/s/a.jpg", 41.0082, 28.9784)};
+    std::atomic<bool> cancelled{false};
+    std::size_t calls = 0;
+    std::vector<long long> sleeps;
+    organizer::resolvePlaces(
+        files, tree.root() / "geo.tsv", &cancelled, {},
+        [&](organizer::GeoPoint, organizer::Place&) {
+            ++calls;
+            cancelled.store(true);
+            return organizer::GeocodeStatus::Throttled;
+        },
+        [&](std::chrono::milliseconds ms) { sleeps.push_back(ms.count()); });
+    CHECK_EQ(calls, std::size_t{1});
+    CHECK(std::accumulate(sleeps.begin(), sleeps.end(), 0LL) < 60000);
+}
+
+void testPlanKeepsSidecarsWithPhoto() {
+    const auto moves = organizer::planOrganize(
+        {meta("/s/x/IMG_1.HEIC", kJuly2023, organizer::PhotoCategory::People), meta("/s/x/IMG_1.MOV"),
+         meta("/s/x/IMG_1.AAE"), meta("/s/x/IMG_2.xmp"), meta("/s/y/IMG_1.HEIC", kJuly2023, organizer::PhotoCategory::People),
+         meta("/s/y/IMG_1.xmp")},
+        "/d", kNothingExists);
+    std::map<std::string, std::string> to;
+    for (const auto& move : moves) {
+        to[move.from.string()] = move.to.string();
+    }
+    const std::string folder = "/d/Photos/People/2023/2023-07/";
+    CHECK_EQ(to["/s/x/IMG_1.HEIC"], folder + "IMG_1.HEIC");
+    CHECK_EQ(to["/s/x/IMG_1.MOV"], folder + "IMG_1.MOV"); // Live Photo video stays with its photo
+    CHECK_EQ(to["/s/x/IMG_1.AAE"], folder + "IMG_1.AAE");
+    CHECK_EQ(to["/s/x/IMG_2.xmp"], std::string("/d/Other/IMG_2.xmp")); // no partner
+    // The second IMG_1 gets a suffix, and its sidecar follows the new name.
+    CHECK_EQ(to["/s/y/IMG_1.HEIC"], folder + "IMG_1 (2).HEIC");
+    CHECK_EQ(to["/s/y/IMG_1.xmp"], folder + "IMG_1 (2).xmp");
+}
+
+void testCliParsesOrganize() {
+    CliParseError error;
+    const char* argv[] = {"mac_cleaner", "organize", "--under=/a", "--dest=/b", "--by=place", "--apply", "--yes"};
+    const auto options = parseArgs(7, const_cast<char**>(argv), error);
+    CHECK(options.has_value());
+    CHECK(options->command == Command::Organize);
+    CHECK(options->under == "/a");
+    CHECK(options->dest == "/b");
+    CHECK(options->photoLayout == organizer::PhotoLayout::Place);
+    CHECK(options->apply);
+
+    const char* plain[] = {"mac_cleaner", "organize", "--under=/a"};
+    const auto defaults = parseArgs(3, const_cast<char**>(plain), error);
+    CHECK(defaults.has_value() && defaults->photoLayout == organizer::PhotoLayout::Content && !defaults->apply);
+
+    // Organizing the whole home folder by default would be a disaster.
+    const char* noFolder[] = {"mac_cleaner", "organize"};
+    CHECK(!parseArgs(2, const_cast<char**>(noFolder), error).has_value());
+    const char* badLayout[] = {"mac_cleaner", "organize", "--under=/a", "--by=size"};
+    CHECK(!parseArgs(4, const_cast<char**>(badLayout), error).has_value());
+}
+
 int main() {
     testHumanReadableBytes();
 
@@ -1647,6 +2096,34 @@ int main() {
     testCliParsesBigFiles();
     testCliParsesPhotos();
     testCliParsesOptimize();
+    testKindFromPath();
+    testCategoryFromLabels();
+    testPlanPhotoPaths();
+    testPlanOtherKinds();
+    testPlanSkipsAlreadyPlaced();
+    testPlanCollisions();
+    testApplyMovesFiles();
+    testApplyRefusesOutsideSource();
+    testApplyNeverOverwrites();
+    testApplyReportsMissingSource();
+    testIsValidDestination();
+    testScanFillsBirthTime();
+    testScanSkipsOrganizedFolders();
+    testOrganizeTwiceMovesNothing();
+    testCellOf();
+    testFolderName();
+    testPlanPlaceLayout();
+    testResolvePlacesGroupsCells();
+    testResolvePlacesUsesCache();
+    testResolvePlacesRetriesThrottled();
+    testResolvePlacesSkipsFailedInCache();
+    testCliParsesOrganize();
+    testScanSkipsPackages();
+    testScanSkipsKindFoldersAnyCase();
+    testPlanCollisionsIgnoreCase();
+    testPlanHoldsUnresolvedPlaces();
+    testResolvePlacesCancelStopsThrottlePause();
+    testPlanKeepsSidecarsWithPhoto();
 
     if (g_failures == 0) {
         std::cout << "All tests passed.\n";

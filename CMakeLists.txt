@@ -47,6 +47,7 @@ set(MACCLEANER_CORE_SOURCES
     src/optimizer.cpp
     src/cli.cpp
     src/walk.cpp
+    src/organizer.cpp
     src/photos.cpp
 )
 
@@ -57,9 +58,9 @@ else()
     list(APPEND MACCLEANER_APPLE_SOURCES src/platform/trash_fallback.cpp)
 endif()
 if(APPLE)
-    list(APPEND MACCLEANER_APPLE_SOURCES src/platform/image_mac.mm)
+    list(APPEND MACCLEANER_APPLE_SOURCES src/platform/image_mac.mm src/platform/organizer_mac.mm)
 else()
-    list(APPEND MACCLEANER_APPLE_SOURCES src/platform/image_fallback.cpp)
+    list(APPEND MACCLEANER_APPLE_SOURCES src/platform/image_fallback.cpp src/platform/organizer_fallback.cpp)
 endif()
 
 add_library(maccleaner_core STATIC
@@ -87,9 +88,14 @@ if(APPLE)
     find_library(IMAGEIO_FRAMEWORK ImageIO REQUIRED)
     find_library(COREGRAPHICS_FRAMEWORK CoreGraphics REQUIRED)
     find_library(IOKIT_FRAMEWORK IOKit REQUIRED)
+    find_library(AVFOUNDATION_FRAMEWORK AVFoundation REQUIRED)
+    find_library(VISION_FRAMEWORK Vision REQUIRED)
+    find_library(MAPKIT_FRAMEWORK MapKit REQUIRED)
+    find_library(CORELOCATION_FRAMEWORK CoreLocation REQUIRED)
     target_link_libraries(maccleaner_core PRIVATE
-        ${FOUNDATION_FRAMEWORK} ${IMAGEIO_FRAMEWORK} ${COREGRAPHICS_FRAMEWORK} ${IOKIT_FRAMEWORK})
-    set_source_files_properties(src/platform/image_mac.mm PROPERTIES
+        ${FOUNDATION_FRAMEWORK} ${IMAGEIO_FRAMEWORK} ${COREGRAPHICS_FRAMEWORK} ${IOKIT_FRAMEWORK}
+        ${AVFOUNDATION_FRAMEWORK} ${VISION_FRAMEWORK} ${MAPKIT_FRAMEWORK} ${CORELOCATION_FRAMEWORK})
+    set_source_files_properties(src/platform/image_mac.mm src/platform/organizer_mac.mm PROPERTIES
         COMPILE_FLAGS "-fobjc-arc"
     )
 endif()
@@ -152,11 +158,13 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
         src/gui/MCBigFilesModel.mm
         src/gui/MCProcessModel.mm
         src/gui/MCPhotoModel.mm
+        src/gui/MCOrganizerModel.mm
         src/gui/MCMainWindowController.mm
         src/gui/MCCleanerViewController.mm
         src/gui/MCLargeFilesViewController.mm
         src/gui/MCPerformanceViewController.mm
         src/gui/MCPhotosViewController.mm
+        src/gui/MCOrganizerViewController.mm
         src/gui/MCOptimizeSheetController.mm
         src/gui/MCUsageSummaryView.mm
         src/gui/MCTheme.mm
@@ -197,9 +205,10 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
     find_library(PHOTOS_FRAMEWORK Photos REQUIRED)
     # QuartzCore draws the hero gradients and the scan ring.
     find_library(QUARTZCORE_FRAMEWORK QuartzCore REQUIRED)
+    # MapKit shows the File Organizer's photo locations.
     target_link_libraries(MacCleaner PRIVATE
         ${COCOA_FRAMEWORK} ${QUARTZ_FRAMEWORK} ${UTTYPE_FRAMEWORK}
-        ${PHOTOS_FRAMEWORK} ${IMAGEIO_FRAMEWORK} ${QUARTZCORE_FRAMEWORK})
+        ${PHOTOS_FRAMEWORK} ${IMAGEIO_FRAMEWORK} ${QUARTZCORE_FRAMEWORK} ${MAPKIT_FRAMEWORK})
 
     target_compile_options(MacCleaner PRIVATE -fobjc-arc)
 

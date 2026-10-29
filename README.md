@@ -295,8 +295,9 @@ allowlist-first rather than denylist-first:
    parsing error yielding `/Users/alice` instead of
    `/Users/alice/Library/Caches/Foo`) is rejected here instead of acted on.
 3. **Hard denylist as a second layer.** `/`, `/System`, `/Library`, `/usr`,
-   `/bin`, `/sbin`, `/private`, `/Applications`, `/Volumes`, and the home
-   directory itself are always rejected, even if something were (wrongly)
+   `/bin`, `/sbin`, `/private`, `/Applications`, `/Volumes` and each volume
+   mount point under it, and the home directory itself are always rejected
+   (files *inside* an external volume are allowed), even if something were (wrongly)
    registered as an allowed root that contains them. So is anything inside
    a Photos library package (`*.photoslibrary`): its `originals/` look like
    plain photo files, but removing them behind Photos' back corrupts the

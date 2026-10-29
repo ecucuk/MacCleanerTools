@@ -256,3 +256,68 @@ CMake + Ninja.
   - Run ctest and expect all tests to pass.
   - Delete `~/MCOrganizeTest` only after the user says yes.
 - [ ] **Step 3: Commit:** `Document the File Organizer`
+
+---
+
+## Amendment: location (spec addendum)
+
+Run these tasks after Task 3 and before Task 4. Task 4 adds `--by=content|place`. Task 5 adds a
+layout pop-up (Content / Place), a Folders/Map segmented control, and an
+`MKMapView` with one `MKPointAnnotation` per cell (title `"<count> photos"`).
+Link MapKit to the app target, and to `maccleaner_core` for the geocoder.
+
+### Task 3a: GPS, grid cells and the place layout
+
+**Files:** `include/maccleaner/organizer.hpp`, `src/organizer.cpp`, `src/platform/organizer_mac.mm`, tests.
+
+**Produces:**
+- `struct GeoPoint { double latitude; double longitude; };`
+- `FileMeta` gets `std::optional<GeoPoint> location`, `std::string country`, and `std::string city`.
+- `enum class PhotoLayout : std::uint8_t { Content, Place };`
+- `planOrganize(files, dest, exists, PhotoLayout layout = PhotoLayout::Content)`
+- `struct GeoCell { int lat; int lon; auto operator<=>(const GeoCell&) const = default; };`
+  - `GeoCell cellOf(GeoPoint)`: `floor(deg / 0.05)`.
+  - `GeoPoint cellCenter(GeoCell)`.
+- `std::string folderName(std::string_view raw, std::string_view fallback)`: replaces `/` and `:` with `-` and trims spaces. It returns `fallback` for an empty result or for `.` / `..`.
+
+**Tests:**
+- `testCellOf`: (41.0082, 28.9784) and (41.0101, 28.9799) give the same cell. (-33.9, 18.4) gives `lat == -678`.
+- `testPlanPlaceLayout`:
+  - country `Turkey`, city `Istanbul` → `/d/Photos/Turkey/Istanbul/2023/2023-07/a.jpg`.
+  - no location → `/d/Photos/Unknown Place/2023/2023-07/b.jpg`.
+  - country set, city empty → `.../Turkey/Unknown City/...`.
+  - a video does not change.
+- `testFolderName`: `"A/B: C "` → `"A-B- C"`. `""` → fallback. `".."` → fallback.
+
+**Mac:** In `readPhoto`, read `kCGImagePropertyGPSDictionary`. Use a negative sign for `S` and `W`.
+
+**Commit:** `Add GPS locations and the place layout to the organizer`
+
+### Task 3b: Reverse geocoding with cache
+
+**Files:** organizer header and cpp, `organizer_mac.mm`, `organizer_fallback.cpp`, `CMakeLists.txt` (MapKit), tests.
+
+**Produces:**
+- `struct Place { std::string country; std::string city; };`
+- `enum class GeocodeStatus { Found, NotFound, Throttled, Failed };`
+- `using GeocodeFn = std::function<GeocodeStatus(GeoPoint, Place&)>;`
+- `GeocodeStatus reverseGeocode(GeoPoint, Place&);` (platform code)
+  - Use `MKReverseGeocodingRequest` with `addressRepresentations.regionName` and `cityName`.
+  - Its completion runs on the main queue. Off the main thread, wait on a semaphore. On the main thread (CLI), spin `CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.1, true)` until it is done.
+  - A throttled request is `MKErrorLoadingThrottled`.
+  - The fallback returns `Failed`.
+- `void resolvePlaces(std::vector<FileMeta>&, const std::filesystem::path& cacheFile, const std::atomic<bool>* cancelled = nullptr, const std::function<void(std::size_t done, std::size_t total)>& progress = {}, const GeocodeFn& geocode = reverseGeocode, const std::function<void(std::chrono::milliseconds)>& sleep = <std::this_thread::sleep_for>);`
+  - It groups the files by cell and reads the cache.
+  - It geocodes only the missing cells, with a 1200 ms sleep between requests. After `Throttled`, it sleeps 60 s and retries once.
+  - It saves `Found` and `NotFound` cells (an empty country and city) and does not save `Failed`.
+  - It fills `country` and `city` for every file.
+
+**Tests:** Use a fake geocode that counts its calls, and a fake sleep that records its durations.
+- `testResolvePlacesGroupsCells`: three photos in two cells → two calls, and every file has its place.
+- `testResolvePlacesUsesCache`: a second run with the same cache file → zero calls.
+- `testResolvePlacesRetriesThrottled`:
+  - The first call returns Throttled and the second returns Found.
+  - The sleeps include 60000 ms, and the place is set.
+- `testResolvePlacesSkipsFailedInCache`: Failed → the next run asks again.
+
+**Commit:** `Reverse geocode photo locations with a grid cache`

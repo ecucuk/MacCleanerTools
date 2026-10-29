@@ -144,3 +144,37 @@ Copy mode; undo and a move log; deleting empty folders; music artist and
 album folders; Vision for videos; matching photos to existing event
 folders by date; a scan cache;
 duplicate detection (Photo Cleaner does that).
+
+## Addendum (2026-10-29): location
+
+About 46% of the photos in `unCategorized` carry GPS (137 of a 300-photo
+sample). The user chose:
+
+- **Photo layout is selectable.** Content (default):
+  `Photos/<Category>/YYYY/YYYY-MM`. Place:
+  `Photos/<Country>/<City>/YYYY/YYYY-MM`. A photo with no GPS, or with a
+  location that the geocoder cannot name, goes to
+  `Photos/Unknown Place/YYYY/YYYY-MM`. A known country with no city uses
+  `Unknown City`. Videos, music and documents do not change.
+- **Names come from Apple.** `MKReverseGeocodingRequest` (MapKit, macOS
+  26+; `CLGeocoder` is deprecated in this SDK) gives `regionName`
+  (country) and `cityName`. The build already targets macOS 27
+  (`minos 27.0`).
+- **Clustering before geocoding.** Coordinates snap to a 0.05° grid
+  (about 5 km). Each cell is geocoded once, at the cell center. Only cell
+  centers leave the machine, and only when the Place layout is chosen.
+- **Rate limit.** One request every 1.2 s. On a throttling error, wait
+  60 s and retry the cell once. Other errors give no name for that cell,
+  and that result is not cached.
+- **Cache.** Results go to a TSV file (`latCell lonCell country city`)
+  that the caller chooses. The GUI uses
+  `~/Library/Caches/<bundle id>/geocode.tsv`. The CLI uses
+  `~/Library/Caches/MacCleaner/geocode.tsv`. A second preview makes no
+  network requests.
+- **Map.** The GUI shows the preview on a map (`MKMapView`) as well as in
+  the outline view. It puts one annotation per grid cell with the photo
+  count, and it needs no geocoding.
+- Location comes from the EXIF GPS dictionary (`Latitude`,
+  `LatitudeRef`, `Longitude`, `LongitudeRef`). Videos have no location in
+  this version.
+- CLI: `--by=content|place` (default `content`).

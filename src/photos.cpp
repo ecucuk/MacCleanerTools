@@ -7,13 +7,17 @@
 #include <bit>
 #include <cctype>
 #include <condition_variable>
+#include <cstring>
 #include <deque>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <mutex>
 #include <numeric>
 #include <set>
 #include <thread>
 #include <tuple>
+#include <unordered_map>
 
 namespace maccleaner::photos {
 
@@ -192,19 +196,37 @@ bool isPhotoExtension(const std::filesystem::path& path) {
     return kExtensions.count(extension) != 0;
 }
 
+namespace {
+
+std::int64_t modifiedNs(const struct stat& st) {
+#ifdef __APPLE__
+    const struct timespec& mtime = st.st_mtimespec;
+#else
+    const struct timespec& mtime = st.st_mtim;
+#endif
+    return static_cast<std::int64_t>(mtime.tv_sec) * 1'000'000'000 + mtime.tv_nsec;
+}
+
+} // namespace
+
 FolderScan scanPhotoFolder(const std::filesystem::path& root,
                            const std::atomic<bool>* cancelled,
                            const PhotoProgress& progress,
-                           const DecodeFn& decode) {
+                           const DecodeFn& decode,
+                           const std::vector<PhotoInfo>& previous) {
     // Decoding is ~all of the time (tens of ms per photo, more for large
     // HEIC), so workers decode while this thread walks. Results land in walk
     // order, so the output does not depend on thread timing.
     struct Job {
         std::filesystem::path path;
         struct stat st;
-        bool decoded = false;
+        bool decoded = false; // already true for a file reused from `previous`
         PhotoInfo info;
     };
+    std::unordered_map<std::string, const PhotoInfo*> known;
+    for (const PhotoInfo& info : previous) {
+        known.emplace(info.id, &info);
+    }
     std::mutex mutex;
     std::condition_variable wake;
     std::deque<Job> jobs; // a deque keeps claimed jobs in place while the walk appends
@@ -222,11 +244,14 @@ FolderScan scanPhotoFolder(const std::filesystem::path& root,
                 return;
             }
             Job& job = jobs[next++];
+            const bool reused = job.decoded;
             lock.unlock();
 
             Decoded decoded;
-            job.decoded = decode(job.path, decoded);
-            if (job.decoded) {
+            if (!reused) {
+                job.decoded = decode(job.path, decoded);
+            }
+            if (!reused && job.decoded) {
                 PhotoInfo& info = job.info;
                 info.id = job.path.string();
                 info.hash = dHash(decoded.gray);
@@ -240,6 +265,7 @@ FolderScan scanPhotoFolder(const std::filesystem::path& root,
                 }
 #endif
                 info.sizeBytes = static_cast<std::uintmax_t>(job.st.st_size);
+                info.modifiedNs = modifiedNs(job.st);
             }
 
             lock.lock();
@@ -261,9 +287,16 @@ FolderScan scanPhotoFolder(const std::filesystem::path& root,
             if (!isPhotoExtension(path)) {
                 return;
             }
+            Job job{path, st, false, {}};
+            const auto earlier = known.find(path.string());
+            if (earlier != known.end() && earlier->second->sizeBytes == static_cast<std::uintmax_t>(st.st_size) &&
+                earlier->second->modifiedNs == modifiedNs(st)) {
+                job.decoded = true;
+                job.info = *earlier->second;
+            }
             {
                 std::lock_guard lock(mutex);
-                jobs.push_back(Job{path, st, false, {}});
+                jobs.push_back(std::move(job));
             }
             wake.notify_one();
         },
@@ -283,6 +316,123 @@ FolderScan scanPhotoFolder(const std::filesystem::path& root,
         }
     }
     return scan;
+}
+
+namespace {
+
+// Bump when the layout or the analysis (decode size, hash, sharpness) changes,
+// so old caches are dropped instead of mixed with new results.
+constexpr std::uint32_t kCacheMagic = 0x4D435048; // "MCPH"
+constexpr std::uint32_t kCacheVersion = 1;
+
+// Host byte order: the cache never leaves this Mac.
+template <typename T>
+void put(std::string& out, const T& value) {
+    out.append(reinterpret_cast<const char*>(&value), sizeof value);
+}
+
+void putString(std::string& out, const std::string& value) {
+    put(out, static_cast<std::uint32_t>(value.size()));
+    out += value;
+}
+
+struct Reader {
+    const std::string& data;
+    std::size_t at = 0;
+
+    template <typename T>
+    bool get(T& value) {
+        if (data.size() - at < sizeof value) {
+            return false;
+        }
+        std::memcpy(&value, data.data() + at, sizeof value);
+        at += sizeof value;
+        return true;
+    }
+
+    bool getString(std::string& value) {
+        std::uint32_t size = 0;
+        if (!get(size) || data.size() - at < size) {
+            return false;
+        }
+        value.assign(data, at, size);
+        at += size;
+        return true;
+    }
+};
+
+} // namespace
+
+bool savePhotoCache(const std::filesystem::path& file, const std::filesystem::path& root,
+                    const std::vector<PhotoInfo>& photos) {
+    std::string out;
+    put(out, kCacheMagic);
+    put(out, kCacheVersion);
+    putString(out, root.string());
+    put(out, static_cast<std::uint64_t>(photos.size()));
+    for (const PhotoInfo& p : photos) {
+        putString(out, p.id);
+        put(out, p.hash);
+        put(out, p.sharpness);
+        put(out, static_cast<std::int32_t>(p.pixelWidth));
+        put(out, static_cast<std::int32_t>(p.pixelHeight));
+        put(out, p.createdUnix);
+        put(out, static_cast<std::uint64_t>(p.sizeBytes));
+        put(out, p.modifiedNs);
+    }
+
+    std::filesystem::path temp = file;
+    temp += ".tmp";
+    {
+        std::ofstream stream(temp, std::ios::binary | std::ios::trunc);
+        stream.write(out.data(), static_cast<std::streamsize>(out.size()));
+        if (!stream.flush()) {
+            return false;
+        }
+    }
+    std::error_code ec;
+    std::filesystem::rename(temp, file, ec);
+    return !ec;
+}
+
+bool loadPhotoCache(const std::filesystem::path& file, const std::filesystem::path& root,
+                    std::vector<PhotoInfo>& photos) {
+    photos.clear();
+    std::ifstream stream(file, std::ios::binary);
+    if (!stream) {
+        return false;
+    }
+    const std::string data((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+
+    Reader in{data};
+    std::uint32_t magic = 0;
+    std::uint32_t version = 0;
+    std::string savedRoot;
+    std::uint64_t count = 0;
+    if (!in.get(magic) || magic != kCacheMagic || !in.get(version) || version != kCacheVersion ||
+        !in.getString(savedRoot) || savedRoot != root.string() || !in.get(count)) {
+        return false;
+    }
+    std::vector<PhotoInfo> loaded;
+    for (std::uint64_t i = 0; i < count; ++i) {
+        PhotoInfo p;
+        std::int32_t width = 0;
+        std::int32_t height = 0;
+        std::uint64_t size = 0;
+        if (!in.getString(p.id) || !in.get(p.hash) || !in.get(p.sharpness) || !in.get(width) ||
+            !in.get(height) || !in.get(p.createdUnix) || !in.get(size) || !in.get(p.modifiedNs)) {
+            return false; // truncated: a count larger than the data never allocates past it
+        }
+        p.pixelWidth = width;
+        p.pixelHeight = height;
+        p.sizeBytes = size;
+        loaded.push_back(std::move(p));
+    }
+    if (in.at != data.size()) {
+        return false;
+    }
+    photos = std::move(loaded);
+    return true;
 }
 
 } // namespace maccleaner::photos

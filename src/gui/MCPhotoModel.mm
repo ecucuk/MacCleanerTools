@@ -9,6 +9,8 @@
 #include "maccleaner/trash.hpp"
 
 #include <atomic>
+#include <cstdio>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -25,6 +27,7 @@ NSString *toNSString(const std::string &value) {
 } // namespace
 
 @interface MCPhotoItem ()
+- (instancetype)initWithInfo:(const photos::PhotoInfo &)info name:(NSString *)name libraryAsset:(BOOL)libraryAsset;
 @property(nonatomic) uint64_t hash64;
 @end
 
@@ -58,6 +61,35 @@ NSString *toNSString(const std::string &value) {
 }
 
 @end
+
+namespace {
+
+NSArray<MCPhotoItem *> *itemsFromFolderPhotos(const std::vector<photos::PhotoInfo> &photos) {
+    NSMutableArray<MCPhotoItem *> *items = [NSMutableArray arrayWithCapacity:photos.size()];
+    for (const photos::PhotoInfo &info : photos) {
+        NSString *name = toNSString(std::filesystem::path(info.id).filename().string());
+        [items addObject:[[MCPhotoItem alloc] initWithInfo:info name:name libraryAsset:NO]];
+    }
+    return items;
+}
+
+// ~/Library/Caches/<bundle id>/photo-scans/<hash of root>.bin; empty if the
+// directory cannot be made (the scan then simply runs uncached). The root is
+// stored inside the file too, so a hash collision only costs a full rescan.
+std::filesystem::path cacheFileForRoot(const std::string &root) {
+    NSURL *caches = [NSFileManager.defaultManager URLsForDirectory:NSCachesDirectory inDomains:NSUserDomainMask].firstObject;
+    NSString *bundle = NSBundle.mainBundle.bundleIdentifier != nil ? NSBundle.mainBundle.bundleIdentifier : @"MacCleaner";
+    NSURL *dir = [[caches URLByAppendingPathComponent:bundle] URLByAppendingPathComponent:@"photo-scans"];
+    if (dir == nil || ![NSFileManager.defaultManager createDirectoryAtURL:dir withIntermediateDirectories:YES
+                                                               attributes:nil error:nil]) {
+        return {};
+    }
+    char name[32];
+    std::snprintf(name, sizeof name, "%016zx.bin", std::hash<std::string>{}(root));
+    return std::filesystem::path(dir.fileSystemRepresentation) / name;
+}
+
+} // namespace
 
 @interface MCPhotoModel () {
     // Owned by the work queue while a scan runs; the cancel flag is the one
@@ -116,19 +148,38 @@ static void (^throttled(void (^progress)(uint64_t, NSString *)))(uint64_t, NSStr
                 report(done, toNSString(current.string()));
             };
         }
-        const photos::FolderScan scan =
-            photos::scanPhotoFolder(std::filesystem::path(rootPath), &self->_cancelled, progressThunk);
-
-        NSMutableArray<MCPhotoItem *> *items = [NSMutableArray arrayWithCapacity:scan.photos.size()];
-        for (const photos::PhotoInfo &info : scan.photos) {
-            NSString *name = toNSString(std::filesystem::path(info.id).filename().string());
-            [items addObject:[[MCPhotoItem alloc] initWithInfo:info name:name libraryAsset:NO]];
+        const std::filesystem::path cache = cacheFileForRoot(rootPath);
+        std::vector<photos::PhotoInfo> previous;
+        photos::loadPhotoCache(cache, rootPath, previous);
+        const photos::FolderScan scan = photos::scanPhotoFolder(std::filesystem::path(rootPath), &self->_cancelled,
+                                                                progressThunk, photos::decodeImageFile, previous);
+        // A cancelled scan, or one of a folder that is gone (an unplugged
+        // drive), misses files the cache still knows; keep the old cache.
+        std::error_code ec;
+        if (!self->_cancelled.load(std::memory_order_relaxed) && !cache.empty() &&
+            std::filesystem::is_directory(rootPath, ec)) {
+            photos::savePhotoCache(cache, rootPath, scan.photos);
         }
+
+        NSArray<MCPhotoItem *> *items = itemsFromFolderPhotos(scan.photos);
         const NSUInteger skipped = static_cast<NSUInteger>(scan.undecodable);
 
         dispatch_async(dispatch_get_main_queue(), ^{
             self.scanning = NO;
             completion(items, skipped);
+        });
+    });
+}
+
+- (void)loadCachedFolder:(NSString *)root completion:(void (^)(NSArray<MCPhotoItem *> *_Nullable))completion {
+    std::string rootPath = root.UTF8String;
+    dispatch_async(self.workQueue, ^{
+        std::vector<photos::PhotoInfo> cached;
+        const std::filesystem::path cache = cacheFileForRoot(rootPath);
+        NSArray<MCPhotoItem *> *items =
+            !cache.empty() && photos::loadPhotoCache(cache, rootPath, cached) ? itemsFromFolderPhotos(cached) : nil;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            completion(items);
         });
     });
 }

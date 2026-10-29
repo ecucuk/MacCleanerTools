@@ -1413,6 +1413,72 @@ void testScanPhotoFolderParallel() {
     CHECK(photos::scanPhotoFolder(tree.top(), &cancelled, {}, cancellingDecode).photos.size() < 40u);
 }
 
+// A rescan with the earlier result decodes only new or changed files and
+// drops deleted ones.
+void testScanPhotoFolderReusesPrevious() {
+    SizedTree tree;
+    for (const char* name : {"a.jpg", "b.jpg", "sub/c.jpg"}) {
+        writeFileOfSize(tree.top() / name, 1);
+    }
+    std::atomic<int> decodes{0};
+    const auto countingDecode = [&](const fs::path&, photos::Decoded& out) {
+        ++decodes;
+        out.gray = makeImage(64, 64, rampPixel);
+        return true;
+    };
+
+    const photos::FolderScan first = photos::scanPhotoFolder(tree.top(), nullptr, {}, countingDecode);
+    CHECK_EQ(decodes.load(), 3);
+    decodes = 0;
+    const photos::FolderScan same = photos::scanPhotoFolder(tree.top(), nullptr, {}, countingDecode, first.photos);
+    CHECK_EQ(decodes.load(), 0);
+    CHECK_EQ(same.photos.size(), 3u);
+
+    writeFileOfSize(tree.top() / "b.jpg", 2); // changed size
+    fs::remove(tree.top() / "sub" / "c.jpg");
+    decodes = 0;
+    const photos::FolderScan changed =
+        photos::scanPhotoFolder(tree.top(), nullptr, {}, countingDecode, same.photos);
+    CHECK_EQ(decodes.load(), 1);
+    CHECK_EQ(changed.photos.size(), 2u);
+}
+
+void testPhotoCacheRoundTrip() {
+    SizedTree tree;
+    const fs::path file = tree.top() / "scan.cache";
+    photos::PhotoInfo a = info("/x/a.jpg", 0x1234, 4000, 87.5, 1700000000);
+    a.sizeBytes = 123456;
+    a.modifiedNs = 1700000000123456789;
+    const std::vector<photos::PhotoInfo> saved = {a, info("/x/b\nname.heic", ~0ull, 10, 0, 0)};
+    CHECK(photos::savePhotoCache(file, "/x", saved));
+
+    std::vector<photos::PhotoInfo> loaded;
+    CHECK(photos::loadPhotoCache(file, "/x", loaded));
+    CHECK_EQ(loaded.size(), 2u);
+    if (loaded.size() == 2) {
+        CHECK_EQ(loaded[0].id, a.id);
+        CHECK(loaded[0].hash == a.hash);
+        CHECK(loaded[0].sharpness == a.sharpness);
+        CHECK_EQ(loaded[0].pixelWidth, 4000);
+        CHECK_EQ(loaded[0].createdUnix, a.createdUnix);
+        CHECK_EQ(loaded[0].sizeBytes, a.sizeBytes);
+        CHECK_EQ(loaded[0].modifiedNs, a.modifiedNs);
+        CHECK_EQ(loaded[1].id, saved[1].id);
+    }
+
+    CHECK(!photos::loadPhotoCache(file, "/other", loaded));
+    CHECK(loaded.empty());
+    CHECK(!photos::loadPhotoCache(tree.top() / "missing.cache", "/x", loaded));
+
+    // Damaged files must be rejected, not half-read.
+    const auto size = fs::file_size(file);
+    fs::resize_file(file, size - 1);
+    CHECK(!photos::loadPhotoCache(file, "/x", loaded));
+    CHECK(loaded.empty());
+    writeFileOfSize(file, 64);
+    CHECK(!photos::loadPhotoCache(file, "/x", loaded));
+}
+
 int main() {
     testHumanReadableBytes();
 
@@ -1457,6 +1523,8 @@ int main() {
     testGroupSkipsUnhashedPhotos();
     testScanPhotoFolderUsesDecoder();
     testScanPhotoFolderParallel();
+    testScanPhotoFolderReusesPrevious();
+    testPhotoCacheRoundTrip();
     testGroupMatchesBruteForce();
     testGroupNoPairs();
 

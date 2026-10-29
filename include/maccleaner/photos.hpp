@@ -29,6 +29,7 @@ struct PhotoInfo {
     int pixelHeight = 0;
     std::int64_t createdUnix = 0; // seconds; 0 = unknown, ranks as newest
     std::uintmax_t sizeBytes = 0;
+    std::int64_t modifiedNs = 0;  // file mtime (folder source); with sizeBytes it marks a changed file
 };
 
 // Hamming distance at or below which two photos count as duplicates.
@@ -96,10 +97,21 @@ using PhotoProgress = std::function<void(std::uint64_t done, const std::filesyst
 // creation date falls back to the file's birth time when the image has no
 // EXIF date. `progress` fires once per decoded file, from the workers but
 // never two calls at once; `cancelled` stops the scan early with what it has
-// so far.
+// so far. A file listed in `previous` with the same size and mtime is not
+// decoded again: its earlier analysis is reused.
 FolderScan scanPhotoFolder(const std::filesystem::path& root,
                            const std::atomic<bool>* cancelled = nullptr,
                            const PhotoProgress& progress = {},
-                           const DecodeFn& decode = decodeImageFile);
+                           const DecodeFn& decode = decodeImageFile,
+                           const std::vector<PhotoInfo>& previous = {});
+
+// The result of a folder scan on disk, so that the app shows it again at once
+// and a rescan decodes only new or changed files. Writes atomically (temp
+// file, then rename). Load returns false and leaves `photos` empty for a
+// missing, damaged or other-version file, or one saved for another root.
+bool savePhotoCache(const std::filesystem::path& file, const std::filesystem::path& root,
+                    const std::vector<PhotoInfo>& photos);
+bool loadPhotoCache(const std::filesystem::path& file, const std::filesystem::path& root,
+                    std::vector<PhotoInfo>& photos);
 
 } // namespace maccleaner::photos

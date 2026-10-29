@@ -37,6 +37,11 @@ NS_ASSUME_NONNULL_BEGIN
           progress:(nullable void (^)(uint64_t done, NSString *current))progress
         completion:(void (^)(NSArray<MCPhotoItem *> *items, NSUInteger skipped))completion;
 
+/// The last saved result of a folder scan of `root`, or nil. Every folder
+/// scan saves one (unless cancelled) and reuses it, so a rescan decodes only
+/// new or changed files. `completion` runs on main.
+- (void)loadCachedFolder:(NSString *)root completion:(void (^)(NSArray<MCPhotoItem *> *_Nullable items))completion;
+
 /// Asks for Photos access, then analyses every image asset that is stored on
 /// this Mac. Assets only in iCloud are not downloaded; they count as skipped.
 /// On denied access `items` is nil and `error` says how to grant it.

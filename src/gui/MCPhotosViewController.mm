@@ -25,6 +25,7 @@ constexpr CGFloat kThumbnailPixels = 96;   // 48 pt rows on Retina
 constexpr CGFloat kPreviewPixels = 1600;
 constexpr CGFloat kLargePreviewPixels = 3000;
 constexpr NSInteger kMaxDistanceStep = 16; // beyond this, unrelated photos merge
+NSString *const kLastFolderKey = @"MCPhotosLastFolder";
 
 // A 3000 px photo's intrinsic size would otherwise squash the toolbars or
 // grow the window; the view should only ever scale the image into its frame.
@@ -55,6 +56,7 @@ NSImageView *imageViewWithoutIntrinsicSize() {
 @end
 
 /// Space toggles the large preview, like Finder's Quick Look (and Large Files).
+/// Return toggles the check of every selected photo.
 @interface MCPhotoOutlineView : NSOutlineView
 @end
 
@@ -65,6 +67,12 @@ NSImageView *imageViewWithoutIntrinsicSize() {
     if (chars.length == 1 && [chars characterAtIndex:0] == ' ' &&
         (event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask) == 0) {
         [NSApp sendAction:@selector(toggleLargePreview:) to:nil from:self];
+        return;
+    }
+    if (chars.length == 1 && ([chars characterAtIndex:0] == NSCarriageReturnCharacter ||
+                              [chars characterAtIndex:0] == NSEnterCharacter) &&
+        (event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask & ~NSEventModifierFlagNumericPad) == 0) {
+        [NSApp sendAction:@selector(toggleCheckSelection:) to:nil from:self];
         return;
     }
     [super keyDown:event];
@@ -103,6 +111,7 @@ NSImageView *imageViewWithoutIntrinsicSize() {
 @property(nonatomic, strong, nullable) NSWindow *largePreviewWindow; // library photos only
 @property(nonatomic, strong) NSTextField *statusLabel;
 @property(nonatomic, strong) NSButton *trashButton;
+@property(nonatomic, strong) NSButton *checkCopiesButton;
 
 @end
 
@@ -265,11 +274,16 @@ NSImageView *imageViewWithoutIntrinsicSize() {
     self.trashButton = [NSButton buttonWithTitle:@"Move to Trash…" target:self action:@selector(removeChecked:)];
     self.trashButton.enabled = NO;
 
+    self.checkCopiesButton = [NSButton buttonWithTitle:@"Check Copies" target:self action:@selector(checkCopies:)];
+    self.checkCopiesButton.toolTip =
+        @"Check every photo in the duplicate groups except the best copy. Select rows and press Return to toggle them.";
+    self.checkCopiesButton.enabled = NO;
+
     NSView *spacer = [[NSView alloc] initWithFrame:NSZeroRect];
     [spacer setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
 
     NSStackView *bottomBar = [NSStackView stackViewWithViews:@[
-        self.statusLabel, spacer, self.largePreviewButton, self.trashButton
+        self.statusLabel, spacer, self.checkCopiesButton, self.largePreviewButton, self.trashButton
     ]];
     bottomBar.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     bottomBar.spacing = 8;
@@ -338,6 +352,29 @@ NSImageView *imageViewWithoutIntrinsicSize() {
 
     [self updateDistanceLabel];
     [self updateHero];
+    [self restoreLastFolder];
+}
+
+/// Shows the last scanned folder from the cache at once, then rescans it in
+/// the background: deleted photos drop out and only new or changed files are
+/// decoded. Moving to Trash stays off until that rescan is done.
+- (void)restoreLastFolder {
+    NSString *root = [NSUserDefaults.standardUserDefaults stringForKey:kLastFolderKey];
+    if (root == nil) {
+        return;
+    }
+    __weak MCPhotosViewController *weakSelf = self;
+    [self.model loadCachedFolder:root
+                      completion:^(NSArray<MCPhotoItem *> *items) {
+                          MCPhotosViewController *strongSelf = weakSelf;
+                          // The user may have started a scan of their own meanwhile.
+                          if (strongSelf == nil || items == nil || strongSelf.hasScanned || strongSelf.model.scanning) {
+                              return;
+                          }
+                          strongSelf.sourceLabel.stringValue = [root stringByAbbreviatingWithTildeInPath];
+                          [strongSelf finishScanWithItems:items skipped:0 root:root];
+                          [strongSelf startFolderScan:root keepResults:YES];
+                      }];
 }
 
 /// The start screen until a scan shows its first result. After a finished
@@ -379,12 +416,13 @@ NSImageView *imageViewWithoutIntrinsicSize() {
                       if (strongSelf == nil || response != NSModalResponseOK || panel.URLs.count == 0) {
                           return;
                       }
-                      [strongSelf startFolderScan:panel.URLs.firstObject.path];
+                      [strongSelf startFolderScan:panel.URLs.firstObject.path keepResults:NO];
                   }];
 }
 
-- (void)startFolderScan:(NSString *)root {
-    [self beginScanWithSource:[root stringByAbbreviatingWithTildeInPath]];
+- (void)startFolderScan:(NSString *)root keepResults:(BOOL)keepResults {
+    [NSUserDefaults.standardUserDefaults setObject:root forKey:kLastFolderKey];
+    [self beginScanWithSource:[root stringByAbbreviatingWithTildeInPath] keepResults:keepResults];
     __weak MCPhotosViewController *weakSelf = self;
     [self.model scanFolder:root
                   progress:^(uint64_t done, NSString *current) {
@@ -399,7 +437,7 @@ NSImageView *imageViewWithoutIntrinsicSize() {
 }
 
 - (void)scanLibrary:(id)sender {
-    [self beginScanWithSource:@"Photos Library"];
+    [self beginScanWithSource:@"Photos Library" keepResults:NO];
     __weak MCPhotosViewController *weakSelf = self;
     [self.model scanLibraryWithProgress:^(uint64_t done, NSString *current) {
         weakSelf.statusLabel.stringValue = [NSString stringWithFormat:@"%llu photos · %@", done, current];
@@ -423,7 +461,9 @@ NSImageView *imageViewWithoutIntrinsicSize() {
     self.stopButton.enabled = NO; // debounce until the completion flips the UI back
 }
 
-- (void)beginScanWithSource:(NSString *)source {
+/// `keepResults` leaves the shown photos and checks in place while a rescan
+/// of the same folder checks them.
+- (void)beginScanWithSource:(NSString *)source keepResults:(BOOL)keepResults {
     self.sourceLabel.stringValue = source;
     self.folderButton.enabled = NO;
     self.libraryButton.enabled = NO;
@@ -431,7 +471,11 @@ NSImageView *imageViewWithoutIntrinsicSize() {
     self.stopButton.enabled = YES;
     self.trashButton.enabled = NO;
     [self.spinner startAnimation:nil];
-    self.statusLabel.stringValue = @"Scanning…";
+    self.statusLabel.stringValue = keepResults ? @"Checking for changes…" : @"Scanning…";
+    self.checkCopiesButton.enabled = NO;
+    if (keepResults) {
+        return;
+    }
     self.items = @[];
     [self.checked removeAllObjects];
     [self rebuildTree];
@@ -479,10 +523,9 @@ NSImageView *imageViewWithoutIntrinsicSize() {
 /// look at every photo and pick what goes, which may be nothing. Each group's
 /// best copy is only labelled.
 - (void)rebuildTree {
-    // Grouping is O(n^2); redo it only when the photos or the tolerance
-    // changed, not for blur-threshold edits.
-    // shortcut: still runs on main, ~1 s per tolerance step at ~30k photos;
-    // move to the model's work queue if libraries that big are common.
+    // Redo grouping only when the photos or the tolerance changed, not for
+    // blur-threshold edits. It stays on main: at 30k photos the core takes
+    // ~15 ms up to tolerance 11 and ~140 ms above (see groupDuplicates).
     if (self.groups == nil || self.groupedDistance != self.distanceStepper.integerValue) {
         self.groupedDistance = self.distanceStepper.integerValue;
         self.groups = [self.model groupsOfItems:self.items maxDistance:self.groupedDistance];
@@ -576,6 +619,43 @@ NSImageView *imageViewWithoutIntrinsicSize() {
     } else {
         [self.checked removeObject:node.item.identifier];
     }
+    [self reloadChecks];
+}
+
+/// Return on the list: checks every selected photo (a group row stands for
+/// its photos), or unchecks them all if they are all checked already.
+- (void)toggleCheckSelection:(id)sender {
+    NSMutableOrderedSet<NSString *> *identifiers = [NSMutableOrderedSet orderedSet];
+    [self.outlineView.selectedRowIndexes enumerateIndexesUsingBlock:^(NSUInteger row, BOOL *) {
+        MCPhotoNode *node = [self.outlineView itemAtRow:(NSInteger)row];
+        for (MCPhotoNode *leaf in node.item != nil ? @[ node ] : node.children) {
+            if (leaf.item != nil) {
+                [identifiers addObject:leaf.item.identifier];
+            }
+        }
+    }];
+    if (identifiers.count == 0) {
+        return;
+    }
+    if ([identifiers.set isSubsetOfSet:self.checked]) {
+        [self.checked minusSet:identifiers.set];
+    } else {
+        [self.checked unionSet:identifiers.set];
+    }
+    [self reloadChecks];
+}
+
+/// Checks every copy in the shown duplicate groups except the best one.
+- (void)checkCopies:(id)sender {
+    for (NSArray<MCPhotoItem *> *group in self.groups) {
+        for (NSUInteger i = 1; i < group.count; ++i) {
+            [self.checked addObject:group[i].identifier];
+        }
+    }
+    [self reloadChecks];
+}
+
+- (void)reloadChecks {
     // The same photo may have a second row in the other section.
     [self.outlineView reloadData];
     [self updateTrashButton];
@@ -583,6 +663,7 @@ NSImageView *imageViewWithoutIntrinsicSize() {
 }
 
 - (void)updateTrashButton {
+    self.checkCopiesButton.enabled = !self.model.scanning && self.groups.count > 0;
     self.trashButton.title = self.scanRoot == nil && self.items.count > 0 ? @"Delete from Photos…" : @"Move to Trash…";
     self.trashButton.enabled = !self.model.scanning && [self checkedItems].count > 0;
 }

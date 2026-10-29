@@ -127,7 +127,9 @@ grayscale, then:
   background can land low too, so the list is for review, not a verdict.
 
 Nothing is checked for you: you look at each photo and tick what should go,
-which may be nothing. Every row has a thumbnail, the selected photo shows in
+which may be nothing. To tick many at once, select rows (a group row stands
+for its photos) and press **Return**, which toggles them; **Check Copies**
+ticks every photo in the duplicate groups except the best copy. Every row has a thumbnail, the selected photo shows in
 the preview pane, and **Large Preview** (or double-click, or **Space**)
 shows it large: the Quick Look panel for folder photos (zoom, arrow through
 the selection), an image window for library photos. Library previews use
@@ -138,6 +140,13 @@ to the Trash through `isSafeToDelete()` with the scanned folder as the only
 allowed root. Library photos are deleted through Photos itself, which shows
 its own confirmation and keeps them in *Recently Deleted* for 30 days;
 photos that are only in iCloud are never downloaded and count as skipped.
+
+A folder scan is saved in `~/Library/Caches/com.maccleaner.app/photo-scans/`.
+Opening Photo Cleaner again shows the last folder at once, then rescans it
+in the background: deleted photos drop out, and only new files or files with
+a changed size or modification time are decoded again (the same applies to
+**Scan Folder…** on a folder scanned before). Moving to Trash stays off until
+that rescan is done.
 
 **Performance** samples your processes every two seconds and shows CPU %,
 memory, kind (App / System / Background), uptime and pid in a sortable

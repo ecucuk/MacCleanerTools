@@ -15,9 +15,15 @@
 #include "maccleaner/walk.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <numeric>
+#include <random>
 #include <string>
+#include <thread>
 #include <vector>
 #include <signal.h>
 #include <sys/stat.h>
@@ -1286,6 +1292,61 @@ void testGroupNoPairs() {
     CHECK(photos::groupDuplicates({info("only", 1, 10, 1, 0)}).empty());
 }
 
+// The multi-index grouping must find exactly the groups of a plain pair
+// scan, on both sides of its chunk-width cutover and at the extremes.
+void testGroupMatchesBruteForce() {
+    std::mt19937_64 rng(1234);
+    std::vector<photos::PhotoInfo> infos;
+    for (int base = 0; base < 60; ++base) {
+        const std::uint64_t hash = rng();
+        for (int copy = 0; copy < 5; ++copy) {
+            std::uint64_t flipped = hash;
+            for (int flip = static_cast<int>(rng() % 18); flip > 0; --flip) {
+                flipped ^= std::uint64_t{1} << (rng() % 64);
+            }
+            infos.push_back(info("p" + std::to_string(infos.size()), flipped, 10, 1, 0));
+        }
+    }
+    infos.push_back(info("unhashed", 0, 10, 1, 0));
+
+    for (int distance : {-1, 0, 1, 3, 6, 9, 11, 12, 16, 40, 64}) {
+        std::vector<std::size_t> parent(infos.size());
+        std::iota(parent.begin(), parent.end(), std::size_t{0});
+        auto find = [&](std::size_t i) {
+            while (parent[i] != i) {
+                i = parent[i];
+            }
+            return i;
+        };
+        for (std::size_t a = 0; a < infos.size(); ++a) {
+            for (std::size_t b = a + 1; b < infos.size(); ++b) {
+                if (infos[a].hash != 0 && infos[b].hash != 0 &&
+                    photos::hammingDistance(infos[a].hash, infos[b].hash) <= distance) {
+                    parent[find(a)] = find(b);
+                }
+            }
+        }
+        std::map<std::size_t, std::vector<std::size_t>> components;
+        for (std::size_t i = 0; i < infos.size(); ++i) {
+            components[find(i)].push_back(i);
+        }
+        std::vector<std::vector<std::size_t>> expected;
+        for (auto& [root, members] : components) {
+            if (members.size() > 1) {
+                expected.push_back(members);
+            }
+        }
+
+        std::vector<std::vector<std::size_t>> actual = photos::groupDuplicates(infos, distance);
+        for (auto& group : actual) {
+            std::sort(group.begin(), group.end());
+        }
+        std::sort(actual.begin(), actual.end());
+        std::sort(expected.begin(), expected.end());
+        CHECK(actual == expected);
+    }
+}
+
 void testScanPhotoFolderUsesDecoder() {
     SizedTree tree;
     for (const char* name : {"a.jpg", "sub/b.JPG", "notes.txt", "bad.png", "L.photoslibrary/originals/x.jpg"}) {
@@ -1311,8 +1372,112 @@ void testScanPhotoFolderUsesDecoder() {
         CHECK_EQ(photo.sizeBytes, 1u);
         CHECK(photo.hash == photos::dHash(makeImage(64, 64, rampPixel)));
     }
+    CHECK(!photos::isSolidStateVolume("/no/such/volume"));
     CHECK(photos::isPhotoExtension("x.HEIC"));
     CHECK(!photos::isPhotoExtension("x.txt"));
+}
+
+// Workers finish out of order; the scan must still report walk order.
+void testScanPhotoFolderParallel() {
+    SizedTree tree;
+    for (int i = 0; i < 40; ++i) {
+        writeFileOfSize(tree.top() / ("d" + std::to_string(i % 4)) / ("p" + std::to_string(i) + ".jpg"), 1);
+    }
+    std::vector<std::string> walkOrder;
+    maccleaner::walkFiles(tree.top(), [&](const fs::path& path, const struct stat&) {
+        if (photos::isPhotoExtension(path)) {
+            walkOrder.push_back(path.string());
+        }
+    });
+
+    const auto slowDecode = [](const fs::path& path, photos::Decoded& out) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(path.filename().string().size() % 3));
+        out.gray = makeImage(64, 64, rampPixel);
+        return true;
+    };
+    std::uint64_t progressCalls = 0;
+    const photos::FolderScan scan = photos::scanPhotoFolder(
+        tree.top(), nullptr, [&](std::uint64_t, const fs::path&) { ++progressCalls; }, slowDecode);
+    CHECK_EQ(scan.photos.size(), walkOrder.size());
+    for (std::size_t i = 0; i < scan.photos.size() && i < walkOrder.size(); ++i) {
+        CHECK_EQ(scan.photos[i].id, walkOrder[i]);
+    }
+    CHECK_EQ(progressCalls, 40u);
+
+    // A cancel stops the workers before they claim the rest.
+    std::atomic<bool> cancelled{false};
+    const auto cancellingDecode = [&](const fs::path&, photos::Decoded& out) {
+        cancelled = true;
+        out.gray = makeImage(64, 64, rampPixel);
+        return true;
+    };
+    CHECK(photos::scanPhotoFolder(tree.top(), &cancelled, {}, cancellingDecode).photos.size() < 40u);
+}
+
+// A rescan with the earlier result decodes only new or changed files and
+// drops deleted ones.
+void testScanPhotoFolderReusesPrevious() {
+    SizedTree tree;
+    for (const char* name : {"a.jpg", "b.jpg", "sub/c.jpg"}) {
+        writeFileOfSize(tree.top() / name, 1);
+    }
+    std::atomic<int> decodes{0};
+    const auto countingDecode = [&](const fs::path&, photos::Decoded& out) {
+        ++decodes;
+        out.gray = makeImage(64, 64, rampPixel);
+        return true;
+    };
+
+    const photos::FolderScan first = photos::scanPhotoFolder(tree.top(), nullptr, {}, countingDecode);
+    CHECK_EQ(decodes.load(), 3);
+    decodes = 0;
+    const photos::FolderScan same = photos::scanPhotoFolder(tree.top(), nullptr, {}, countingDecode, first.photos);
+    CHECK_EQ(decodes.load(), 0);
+    CHECK_EQ(same.photos.size(), 3u);
+
+    writeFileOfSize(tree.top() / "b.jpg", 2); // changed size
+    fs::remove(tree.top() / "sub" / "c.jpg");
+    decodes = 0;
+    const photos::FolderScan changed =
+        photos::scanPhotoFolder(tree.top(), nullptr, {}, countingDecode, same.photos);
+    CHECK_EQ(decodes.load(), 1);
+    CHECK_EQ(changed.photos.size(), 2u);
+}
+
+void testPhotoCacheRoundTrip() {
+    SizedTree tree;
+    const fs::path file = tree.top() / "scan.cache";
+    photos::PhotoInfo a = info("/x/a.jpg", 0x1234, 4000, 87.5, 1700000000);
+    a.sizeBytes = 123456;
+    a.modifiedNs = 1700000000123456789;
+    const std::vector<photos::PhotoInfo> saved = {a, info("/x/b\nname.heic", ~0ull, 10, 0, 0)};
+    CHECK(photos::savePhotoCache(file, "/x", saved));
+
+    std::vector<photos::PhotoInfo> loaded;
+    CHECK(photos::loadPhotoCache(file, "/x", loaded));
+    CHECK_EQ(loaded.size(), 2u);
+    if (loaded.size() == 2) {
+        CHECK_EQ(loaded[0].id, a.id);
+        CHECK(loaded[0].hash == a.hash);
+        CHECK(loaded[0].sharpness == a.sharpness);
+        CHECK_EQ(loaded[0].pixelWidth, 4000);
+        CHECK_EQ(loaded[0].createdUnix, a.createdUnix);
+        CHECK_EQ(loaded[0].sizeBytes, a.sizeBytes);
+        CHECK_EQ(loaded[0].modifiedNs, a.modifiedNs);
+        CHECK_EQ(loaded[1].id, saved[1].id);
+    }
+
+    CHECK(!photos::loadPhotoCache(file, "/other", loaded));
+    CHECK(loaded.empty());
+    CHECK(!photos::loadPhotoCache(tree.top() / "missing.cache", "/x", loaded));
+
+    // Damaged files must be rejected, not half-read.
+    const auto size = fs::file_size(file);
+    fs::resize_file(file, size - 1);
+    CHECK(!photos::loadPhotoCache(file, "/x", loaded));
+    CHECK(loaded.empty());
+    writeFileOfSize(file, 64);
+    CHECK(!photos::loadPhotoCache(file, "/x", loaded));
 }
 
 int main() {
@@ -1358,6 +1523,10 @@ int main() {
     testGroupTransitive();
     testGroupSkipsUnhashedPhotos();
     testScanPhotoFolderUsesDecoder();
+    testScanPhotoFolderParallel();
+    testScanPhotoFolderReusesPrevious();
+    testPhotoCacheRoundTrip();
+    testGroupMatchesBruteForce();
     testGroupNoPairs();
 
     testClassifyProcess();

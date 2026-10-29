@@ -9,6 +9,9 @@
 #include "maccleaner/trash.hpp"
 
 #include <atomic>
+#include <cstdio>
+#include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -24,6 +27,7 @@ NSString *toNSString(const std::string &value) {
 } // namespace
 
 @interface MCPhotoItem ()
+- (instancetype)initWithInfo:(const photos::PhotoInfo &)info name:(NSString *)name libraryAsset:(BOOL)libraryAsset;
 @property(nonatomic) uint64_t hash64;
 @end
 
@@ -58,6 +62,35 @@ NSString *toNSString(const std::string &value) {
 
 @end
 
+namespace {
+
+NSArray<MCPhotoItem *> *itemsFromFolderPhotos(const std::vector<photos::PhotoInfo> &photos) {
+    NSMutableArray<MCPhotoItem *> *items = [NSMutableArray arrayWithCapacity:photos.size()];
+    for (const photos::PhotoInfo &info : photos) {
+        NSString *name = toNSString(std::filesystem::path(info.id).filename().string());
+        [items addObject:[[MCPhotoItem alloc] initWithInfo:info name:name libraryAsset:NO]];
+    }
+    return items;
+}
+
+// ~/Library/Caches/<bundle id>/photo-scans/<hash of root>.bin; empty if the
+// directory cannot be made (the scan then simply runs uncached). The root is
+// stored inside the file too, so a hash collision only costs a full rescan.
+std::filesystem::path cacheFileForRoot(const std::string &root) {
+    NSURL *caches = [NSFileManager.defaultManager URLsForDirectory:NSCachesDirectory inDomains:NSUserDomainMask].firstObject;
+    NSString *bundle = NSBundle.mainBundle.bundleIdentifier != nil ? NSBundle.mainBundle.bundleIdentifier : @"MacCleaner";
+    NSURL *dir = [[caches URLByAppendingPathComponent:bundle] URLByAppendingPathComponent:@"photo-scans"];
+    if (dir == nil || ![NSFileManager.defaultManager createDirectoryAtURL:dir withIntermediateDirectories:YES
+                                                               attributes:nil error:nil]) {
+        return {};
+    }
+    char name[32];
+    std::snprintf(name, sizeof name, "%016zx.bin", std::hash<std::string>{}(root));
+    return std::filesystem::path(dir.fileSystemRepresentation) / name;
+}
+
+} // namespace
+
 @interface MCPhotoModel () {
     // Owned by the work queue while a scan runs; the cancel flag is the one
     // piece both threads touch, which is exactly what atomics are for.
@@ -78,17 +111,18 @@ NSString *toNSString(const std::string &value) {
 }
 
 // Throttles work-thread progress to ~4 Hz before it touches the main queue.
+// Safe to call from several threads at once (the library scan does).
 static void (^throttled(void (^progress)(uint64_t, NSString *)))(uint64_t, NSString *) {
     if (progress == nil) {
         return nil;
     }
-    __block CFAbsoluteTime lastReport = 0;
+    auto lastReport = std::make_shared<std::atomic<CFAbsoluteTime>>(0);
     return ^(uint64_t done, NSString *current) {
         const CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
-        if (now - lastReport < 0.25) {
+        CFAbsoluteTime last = lastReport->load(std::memory_order_relaxed);
+        if (now - last < 0.25 || !lastReport->compare_exchange_strong(last, now, std::memory_order_relaxed)) {
             return;
         }
-        lastReport = now;
         dispatch_async(dispatch_get_main_queue(), ^{
             progress(done, current);
         });
@@ -114,19 +148,38 @@ static void (^throttled(void (^progress)(uint64_t, NSString *)))(uint64_t, NSStr
                 report(done, toNSString(current.string()));
             };
         }
-        const photos::FolderScan scan =
-            photos::scanPhotoFolder(std::filesystem::path(rootPath), &self->_cancelled, progressThunk);
-
-        NSMutableArray<MCPhotoItem *> *items = [NSMutableArray arrayWithCapacity:scan.photos.size()];
-        for (const photos::PhotoInfo &info : scan.photos) {
-            NSString *name = toNSString(std::filesystem::path(info.id).filename().string());
-            [items addObject:[[MCPhotoItem alloc] initWithInfo:info name:name libraryAsset:NO]];
+        const std::filesystem::path cache = cacheFileForRoot(rootPath);
+        std::vector<photos::PhotoInfo> previous;
+        photos::loadPhotoCache(cache, rootPath, previous);
+        const photos::FolderScan scan = photos::scanPhotoFolder(std::filesystem::path(rootPath), &self->_cancelled,
+                                                                progressThunk, photos::decodeImageFile, previous);
+        // A cancelled scan, or one of a folder that is gone (an unplugged
+        // drive), misses files the cache still knows; keep the old cache.
+        std::error_code ec;
+        if (!self->_cancelled.load(std::memory_order_relaxed) && !cache.empty() &&
+            std::filesystem::is_directory(rootPath, ec)) {
+            photos::savePhotoCache(cache, rootPath, scan.photos);
         }
+
+        NSArray<MCPhotoItem *> *items = itemsFromFolderPhotos(scan.photos);
         const NSUInteger skipped = static_cast<NSUInteger>(scan.undecodable);
 
         dispatch_async(dispatch_get_main_queue(), ^{
             self.scanning = NO;
             completion(items, skipped);
+        });
+    });
+}
+
+- (void)loadCachedFolder:(NSString *)root completion:(void (^)(NSArray<MCPhotoItem *> *_Nullable))completion {
+    std::string rootPath = root.UTF8String;
+    dispatch_async(self.workQueue, ^{
+        std::vector<photos::PhotoInfo> cached;
+        const std::filesystem::path cache = cacheFileForRoot(rootPath);
+        NSArray<MCPhotoItem *> *items =
+            !cache.empty() && photos::loadPhotoCache(cache, rootPath, cached) ? itemsFromFolderPhotos(cached) : nil;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            completion(items);
         });
     });
 }
@@ -164,14 +217,24 @@ static void (^throttled(void (^progress)(uint64_t, NSString *)))(uint64_t, NSStr
             options.networkAccessAllowed = NO; // never download from iCloud
             const CGSize target = CGSizeMake(photos::kDecodeMaxPixels, photos::kDecodeMaxPixels);
 
-            NSMutableArray<MCPhotoItem *> *items = [NSMutableArray array];
-            __block NSUInteger skipped = 0;
-            for (NSUInteger i = 0; i < assets.count; ++i) {
+            // Decoding dominates, so assets are analysed in parallel. The
+            // fetch result loads lazily and is not documented as
+            // thread-safe, so its assets are read up front.
+            NSArray<PHAsset *> *all = [assets objectsAtIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, assets.count)]];
+            std::vector<MCPhotoItem *> slots(all.count); // asset order, whatever the thread timing
+            std::atomic<NSUInteger> skipped{0};
+            std::atomic<NSUInteger> done{0};
+            // Blocks capture C++ objects as const copies; these point at the
+            // locals instead, which outlive the synchronous dispatch_apply.
+            MCPhotoItem *__strong *slot = slots.data();
+            std::atomic<NSUInteger> *skippedCount = &skipped;
+            std::atomic<NSUInteger> *doneCount = &done;
+            dispatch_apply(all.count, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^(size_t i) {
                 if (self->_cancelled.load(std::memory_order_relaxed)) {
-                    break;
+                    return;
                 }
                 @autoreleasepool {
-                    PHAsset *asset = assets[i];
+                    PHAsset *asset = all[i];
                     __block photos::GrayImage gray;
                     __block BOOL decoded = NO;
                     [[PHImageManager defaultManager] requestImageForAsset:asset
@@ -183,8 +246,8 @@ static void (^throttled(void (^progress)(uint64_t, NSString *)))(uint64_t, NSStr
                         decoded = cgImage != nullptr && photos::grayFromCGImage(cgImage, gray);
                     }];
                     if (!decoded) {
-                        ++skipped;
-                        continue;
+                        skippedCount->fetch_add(1, std::memory_order_relaxed);
+                        return;
                     }
 
                     photos::PhotoInfo info;
@@ -209,13 +272,20 @@ static void (^throttled(void (^progress)(uint64_t, NSString *)))(uint64_t, NSStr
                     if (name == nil) {
                         name = asset.localIdentifier;
                     }
-                    [items addObject:[[MCPhotoItem alloc] initWithInfo:info name:name libraryAsset:YES]];
+                    slot[i] = [[MCPhotoItem alloc] initWithInfo:info name:name libraryAsset:YES];
                     if (report != nil) {
-                        report(items.count, name);
+                        report(doneCount->fetch_add(1, std::memory_order_relaxed) + 1, name);
                     }
                 }
+            });
+
+            NSMutableArray<MCPhotoItem *> *items = [NSMutableArray arrayWithCapacity:all.count];
+            for (MCPhotoItem *item : slots) {
+                if (item != nil) {
+                    [items addObject:item];
+                }
             }
-            finish(items, skipped, nil);
+            finish(items, skipped.load(), nil);
         });
     }];
 }

@@ -6,6 +6,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <Foundation/Foundation.h>
 #import <ImageIO/ImageIO.h>
+#import <MapKit/MapKit.h>
 #import <Vision/Vision.h>
 
 #include <cerrno>
@@ -134,6 +135,46 @@ void readVideo(FileMeta& meta, NSURL* url) {
 }
 
 } // namespace
+
+GeocodeStatus reverseGeocode(GeoPoint point, Place& place) {
+    @autoreleasepool {
+        CLLocation* location = [[CLLocation alloc] initWithLatitude:point.latitude longitude:point.longitude];
+        MKReverseGeocodingRequest* request = [[MKReverseGeocodingRequest alloc] initWithLocation:location];
+        if (request == nil) {
+            return GeocodeStatus::Failed;
+        }
+        __block GeocodeStatus status = GeocodeStatus::Failed;
+        __block NSString* country = nil;
+        __block NSString* city = nil;
+        __block bool done = false;
+        dispatch_semaphore_t finished = dispatch_semaphore_create(0);
+        // The completion handler runs on the main queue.
+        [request getMapItemsWithCompletionHandler:^(NSArray<MKMapItem*>* items, NSError* error) {
+          MKAddressRepresentations* address = items.firstObject.addressRepresentations;
+          if (address != nil) {
+              country = address.regionName;
+              city = address.cityName;
+              status = country.length > 0 ? GeocodeStatus::Found : GeocodeStatus::NotFound;
+          } else if ([error.domain isEqual:MKErrorDomain] && error.code == MKErrorLoadingThrottled) {
+              status = GeocodeStatus::Throttled;
+          } else if ([error.domain isEqual:MKErrorDomain] && error.code == MKErrorPlacemarkNotFound) {
+              status = GeocodeStatus::NotFound;
+          }
+          done = true;
+          dispatch_semaphore_signal(finished);
+        }];
+        if (NSThread.isMainThread) {
+            while (!done) {
+                CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.1, true);
+            }
+        } else {
+            dispatch_semaphore_wait(finished, DISPATCH_TIME_FOREVER);
+        }
+        place.country = country != nil ? country.UTF8String : "";
+        place.city = city != nil ? city.UTF8String : "";
+        return status;
+    }
+}
 
 void readMetadata(FileMeta& meta) {
     if (meta.kind != Kind::Photos && meta.kind != Kind::Videos) {

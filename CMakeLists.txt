@@ -90,9 +90,11 @@ if(APPLE)
     find_library(IOKIT_FRAMEWORK IOKit REQUIRED)
     find_library(AVFOUNDATION_FRAMEWORK AVFoundation REQUIRED)
     find_library(VISION_FRAMEWORK Vision REQUIRED)
+    find_library(MAPKIT_FRAMEWORK MapKit REQUIRED)
+    find_library(CORELOCATION_FRAMEWORK CoreLocation REQUIRED)
     target_link_libraries(maccleaner_core PRIVATE
         ${FOUNDATION_FRAMEWORK} ${IMAGEIO_FRAMEWORK} ${COREGRAPHICS_FRAMEWORK} ${IOKIT_FRAMEWORK}
-        ${AVFOUNDATION_FRAMEWORK} ${VISION_FRAMEWORK})
+        ${AVFOUNDATION_FRAMEWORK} ${VISION_FRAMEWORK} ${MAPKIT_FRAMEWORK} ${CORELOCATION_FRAMEWORK})
     set_source_files_properties(src/platform/image_mac.mm src/platform/organizer_mac.mm PROPERTIES
         COMPILE_FLAGS "-fobjc-arc"
     )

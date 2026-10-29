@@ -6,6 +6,10 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <fstream>
+#include <map>
+#include <sstream>
+#include <thread>
 #include <set>
 #include <string_view>
 
@@ -263,6 +267,92 @@ std::vector<FileMeta> scanForOrganize(const fs::path& source, const fs::path& de
         },
         cancelled, {}, enterDir);
     return files;
+}
+
+namespace {
+
+// Tabs and newlines would break the TSV cache.
+std::string cacheField(std::string text) {
+    std::replace_if(text.begin(), text.end(), [](char c) { return c == '\t' || c == '\n' || c == '\r'; }, ' ');
+    return text;
+}
+
+} // namespace
+
+void resolvePlaces(std::vector<FileMeta>& files, const fs::path& cacheFile, const std::atomic<bool>* cancelled,
+                   const std::function<void(std::size_t done, std::size_t total)>& progress, const GeocodeFn& geocode,
+                   const SleepFn& sleep) {
+    const SleepFn pause = sleep ? sleep : SleepFn([](std::chrono::milliseconds ms) { std::this_thread::sleep_for(ms); });
+    std::map<GeoCell, Place> known;
+    {
+        std::ifstream in(cacheFile);
+        std::string line;
+        while (std::getline(in, line)) {
+            std::istringstream fields(line);
+            std::string lat, lon;
+            Place place;
+            if (std::getline(fields, lat, '\t') && std::getline(fields, lon, '\t') &&
+                std::getline(fields, place.country, '\t')) {
+                std::getline(fields, place.city); // empty for a NotFound cell
+                try {
+                    known[{std::stoi(lat), std::stoi(lon)}] = place;
+                } catch (const std::exception&) {
+                    // A damaged line is just looked up again.
+                }
+            }
+        }
+    }
+
+    std::vector<GeoCell> missing;
+    for (const FileMeta& file : files) {
+        if (file.location) {
+            const GeoCell cell = cellOf(*file.location);
+            if (known.count(cell) == 0 && std::find(missing.begin(), missing.end(), cell) == missing.end()) {
+                missing.push_back(cell);
+            }
+        }
+    }
+
+    std::error_code ec;
+    fs::create_directories(cacheFile.parent_path(), ec);
+    std::ofstream out(cacheFile, std::ios::app);
+    for (std::size_t i = 0; i < missing.size(); ++i) {
+        if (cancelled != nullptr && cancelled->load()) {
+            break;
+        }
+        if (i > 0) {
+            pause(std::chrono::milliseconds(1200));
+        }
+        Place place;
+        GeocodeStatus status = geocode(cellCenter(missing[i]), place);
+        if (status == GeocodeStatus::Throttled) {
+            pause(std::chrono::milliseconds(60000));
+            place = {};
+            status = geocode(cellCenter(missing[i]), place);
+        }
+        if (status == GeocodeStatus::Found || status == GeocodeStatus::NotFound) {
+            if (status == GeocodeStatus::NotFound) {
+                place = {};
+            }
+            place = {cacheField(place.country), cacheField(place.city)};
+            known[missing[i]] = place;
+            out << missing[i].lat << '\t' << missing[i].lon << '\t' << place.country << '\t' << place.city << '\n';
+            out.flush();
+        }
+        if (progress) {
+            progress(i + 1, missing.size());
+        }
+    }
+
+    for (FileMeta& file : files) {
+        if (file.location) {
+            const auto found = known.find(cellOf(*file.location));
+            if (found != known.end()) {
+                file.country = found->second.country;
+                file.city = found->second.city;
+            }
+        }
+    }
 }
 
 } // namespace maccleaner::organizer

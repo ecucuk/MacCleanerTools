@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
@@ -130,5 +131,30 @@ using ScanProgress = std::function<void(std::size_t filesSeen)>;
 std::vector<FileMeta> scanForOrganize(const std::filesystem::path& source, const std::filesystem::path& dest,
                                       const std::atomic<bool>* cancelled = nullptr, const ScanProgress& progress = {},
                                       const MetadataFn& read = readMetadata);
+
+struct Place {
+    std::string country;
+    std::string city;
+};
+
+enum class GeocodeStatus { Found, NotFound, Throttled, Failed };
+
+using GeocodeFn = std::function<GeocodeStatus(GeoPoint point, Place& place)>;
+using SleepFn = std::function<void(std::chrono::milliseconds)>;
+
+// Apple reverse geocoding (MapKit). Blocks until done; safe on the main
+// thread too, where it runs the run loop while it waits. Platform code.
+GeocodeStatus reverseGeocode(GeoPoint point, Place& place);
+
+// Fills `country` and `city` of every file with a location. Files are
+// grouped by GeoCell; each cell is looked up once at its center, through
+// the TSV `cacheFile` first ("lat\tlon\tcountry\tcity" per line) and then
+// `geocode`, one request every 1.2 s. A throttled request waits 60 s and is
+// retried once. Found and NotFound cells are appended to the cache as they
+// arrive (so a cancelled run keeps them); Failed cells are not.
+void resolvePlaces(std::vector<FileMeta>& files, const std::filesystem::path& cacheFile,
+                   const std::atomic<bool>* cancelled = nullptr,
+                   const std::function<void(std::size_t done, std::size_t total)>& progress = {},
+                   const GeocodeFn& geocode = reverseGeocode, const SleepFn& sleep = {});
 
 } // namespace maccleaner::organizer

@@ -1750,6 +1750,83 @@ void testPlanPlaceLayout() {
     }
 }
 
+namespace {
+organizer::FileMeta photoAt(const char* path, double lat, double lon) {
+    auto file = meta(path);
+    file.location = organizer::GeoPoint{lat, lon};
+    return file;
+}
+
+struct FakeGeocoder {
+    std::vector<organizer::GeocodeStatus> script; // returned in order; then Found
+    std::size_t calls = 0;
+    std::vector<long long> sleeps;
+
+    organizer::GeocodeFn geocode() {
+        return [this](organizer::GeoPoint, organizer::Place& place) {
+            const auto status = calls < script.size() ? script[calls] : organizer::GeocodeStatus::Found;
+            ++calls;
+            if (status == organizer::GeocodeStatus::Found) {
+                place = {"Turkey", "Istanbul"};
+            }
+            return status;
+        };
+    }
+    std::function<void(std::chrono::milliseconds)> sleep() {
+        return [this](std::chrono::milliseconds ms) { sleeps.push_back(ms.count()); };
+    }
+};
+} // namespace
+
+void testResolvePlacesGroupsCells() {
+    ScratchTree tree;
+    std::vector<organizer::FileMeta> files = {photoAt("/s/a.jpg", 41.0082, 28.9784),
+                                              photoAt("/s/b.jpg", 41.0101, 28.9799),
+                                              photoAt("/s/c.jpg", 39.92, 32.85), meta("/s/d.jpg")};
+    FakeGeocoder fake;
+    organizer::resolvePlaces(files, tree.root() / "geo.tsv", nullptr, {}, fake.geocode(), fake.sleep());
+    CHECK_EQ(fake.calls, std::size_t{2});
+    CHECK_EQ(files[0].city, std::string("Istanbul"));
+    CHECK_EQ(files[2].country, std::string("Turkey"));
+    CHECK(files[3].country.empty());
+}
+
+void testResolvePlacesUsesCache() {
+    ScratchTree tree;
+    std::vector<organizer::FileMeta> files = {photoAt("/s/a.jpg", 41.0082, 28.9784)};
+    FakeGeocoder first;
+    organizer::resolvePlaces(files, tree.root() / "geo.tsv", nullptr, {}, first.geocode(), first.sleep());
+    std::vector<organizer::FileMeta> again = {photoAt("/s/a.jpg", 41.0082, 28.9784)};
+    FakeGeocoder second;
+    organizer::resolvePlaces(again, tree.root() / "geo.tsv", nullptr, {}, second.geocode(), second.sleep());
+    CHECK_EQ(second.calls, std::size_t{0});
+    CHECK_EQ(again[0].city, std::string("Istanbul"));
+}
+
+void testResolvePlacesRetriesThrottled() {
+    ScratchTree tree;
+    std::vector<organizer::FileMeta> files = {photoAt("/s/a.jpg", 41.0082, 28.9784)};
+    FakeGeocoder fake;
+    fake.script = {organizer::GeocodeStatus::Throttled};
+    organizer::resolvePlaces(files, tree.root() / "geo.tsv", nullptr, {}, fake.geocode(), fake.sleep());
+    CHECK_EQ(fake.calls, std::size_t{2});
+    CHECK(std::find(fake.sleeps.begin(), fake.sleeps.end(), 60000) != fake.sleeps.end());
+    CHECK_EQ(files[0].city, std::string("Istanbul"));
+}
+
+void testResolvePlacesSkipsFailedInCache() {
+    ScratchTree tree;
+    std::vector<organizer::FileMeta> files = {photoAt("/s/a.jpg", 41.0082, 28.9784), photoAt("/s/n.jpg", 0.01, 0.01)};
+    FakeGeocoder fake;
+    fake.script = {organizer::GeocodeStatus::Failed, organizer::GeocodeStatus::NotFound};
+    organizer::resolvePlaces(files, tree.root() / "geo.tsv", nullptr, {}, fake.geocode(), fake.sleep());
+    CHECK(files[0].country.empty());
+    FakeGeocoder again;
+    organizer::resolvePlaces(files, tree.root() / "geo.tsv", nullptr, {}, again.geocode(), again.sleep());
+    // The failed cell is asked again; the NotFound cell is cached.
+    CHECK_EQ(again.calls, std::size_t{1});
+}
+
 int main() {
     testHumanReadableBytes();
 
@@ -1851,6 +1928,10 @@ int main() {
     testCellOf();
     testFolderName();
     testPlanPlaceLayout();
+    testResolvePlacesGroupsCells();
+    testResolvePlacesUsesCache();
+    testResolvePlacesRetriesThrottled();
+    testResolvePlacesSkipsFailedInCache();
 
     if (g_failures == 0) {
         std::cout << "All tests passed.\n";

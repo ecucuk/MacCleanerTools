@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <iterator>
 #include <system_error>
 
 namespace maccleaner::safety {
@@ -52,7 +53,7 @@ const std::vector<fs::path>& hardDenylist() {
     // allowlisted root (see isSafeToDelete), and "/" is never registered as
     // one.
     static const std::vector<fs::path> denylist{
-        "/System", "/Library", "/usr", "/bin", "/sbin", "/private", "/Applications", "/Volumes",
+        "/System", "/Library", "/usr", "/bin", "/sbin", "/private", "/Applications",
     };
     return denylist;
 }
@@ -77,6 +78,13 @@ bool touchesHomeDirectoryItself(const fs::path& resolved) {
         return false;
     }
     return resolved == resolvedHome || isDescendantOf(resolvedHome, resolved);
+}
+
+// Files on external volumes are fair game (a folder scan may sit on one), but
+// /Volumes itself and each mount point directly under it are never deleted.
+bool isVolumesOrMountPoint(const fs::path& resolved) {
+    const fs::path volumes = "/Volumes";
+    return overlaps(resolved, volumes) && std::distance(resolved.begin(), resolved.end()) <= 3;
 }
 
 } // namespace
@@ -152,6 +160,10 @@ bool isSafeToDelete(const fs::path& candidate, const AllowedRoots& allowed, std:
     //     for why this is a narrower check than the system-container one above).
     if (touchesHomeDirectoryItself(resolved)) {
         return reject("refusing to delete the home directory itself");
+    }
+
+    if (isVolumesOrMountPoint(resolved)) {
+        return reject("refusing to delete /Volumes or a volume mount point: " + resolved.string());
     }
 
     // 3c. Never reach into a Photos library package; its assets are deleted

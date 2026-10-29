@@ -14,4 +14,9 @@ bool isSolidStateVolume(const std::filesystem::path&) {
     return false;
 }
 
+bool writeHeicCopy(const std::filesystem::path&, const std::filesystem::path&, double, std::string& error) {
+    error = "HEIC encoding needs macOS";
+    return false;
+}
+
 } // namespace maccleaner::photos

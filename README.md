@@ -135,9 +135,16 @@ shows it large: the Quick Look panel for folder photos (zoom, arrow through
 the selection), an image window for library photos. Library previews use
 what is stored on this Mac and never download from iCloud. Each group's **best copy** — most pixels, then
 sharpest, then oldest — is labelled so you can see which one to keep. Both
-thresholds can be changed after a scan without rescanning. Folder photos go
-to the Trash through `isSafeToDelete()` with the scanned folder as the only
-allowed root. Library photos are deleted through Photos itself, which shows
+thresholds can be changed after a scan without rescanning. **Remove…** takes
+the checked folder photos away in the background, with progress and **Stop**:
+**Move to Trash**, **Back Up & Delete…** (moves them into a folder outside
+the scanned one, keeping their subfolders and never replacing a file there;
+JPEG, PNG and TIFF are re-encoded as HEIC at quality 0.8 with their metadata
+and dates, which halved real JPEGs with no visible loss, and kept as they
+are when HEIC would not be smaller),
+or **Delete Permanently…** (asks again; Return cancels). Every photo first
+passes `isSafeToDelete()` with the scanned folder as the only allowed root.
+Library photos are deleted through Photos itself, which shows
 its own confirmation and keeps them in *Recently Deleted* for 30 days;
 photos that are only in iCloud are never downloaded and count as skipped.
 
@@ -145,7 +152,7 @@ A folder scan is saved in `~/Library/Caches/com.maccleaner.app/photo-scans/`.
 Opening Photo Cleaner again shows the last folder at once, then rescans it
 in the background: deleted photos drop out, and only new files or files with
 a changed size or modification time are decoded again (the same applies to
-**Scan Folder…** on a folder scanned before). Moving to Trash stays off until
+**Scan Folder…** on a folder scanned before). **Remove…** stays off until
 that rescan is done.
 
 **Performance** samples your processes every two seconds and shows CPU %,
@@ -295,8 +302,9 @@ allowlist-first rather than denylist-first:
    parsing error yielding `/Users/alice` instead of
    `/Users/alice/Library/Caches/Foo`) is rejected here instead of acted on.
 3. **Hard denylist as a second layer.** `/`, `/System`, `/Library`, `/usr`,
-   `/bin`, `/sbin`, `/private`, `/Applications`, `/Volumes`, and the home
-   directory itself are always rejected, even if something were (wrongly)
+   `/bin`, `/sbin`, `/private`, `/Applications`, `/Volumes` and each volume
+   mount point under it, and the home directory itself are always rejected
+   (files *inside* an external volume are allowed), even if something were (wrongly)
    registered as an allowed root that contains them. So is anything inside
    a Photos library package (`*.photoslibrary`): its `originals/` look like
    plain photo files, but removing them behind Photos' back corrupts the

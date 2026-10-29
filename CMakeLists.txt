@@ -158,11 +158,13 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
         src/gui/MCBigFilesModel.mm
         src/gui/MCProcessModel.mm
         src/gui/MCPhotoModel.mm
+        src/gui/MCOrganizerModel.mm
         src/gui/MCMainWindowController.mm
         src/gui/MCCleanerViewController.mm
         src/gui/MCLargeFilesViewController.mm
         src/gui/MCPerformanceViewController.mm
         src/gui/MCPhotosViewController.mm
+        src/gui/MCOrganizerViewController.mm
         src/gui/MCOptimizeSheetController.mm
         src/gui/MCUsageSummaryView.mm
         src/gui/MCTheme.mm
@@ -203,9 +205,10 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
     find_library(PHOTOS_FRAMEWORK Photos REQUIRED)
     # QuartzCore draws the hero gradients and the scan ring.
     find_library(QUARTZCORE_FRAMEWORK QuartzCore REQUIRED)
+    # MapKit shows the File Organizer's photo locations.
     target_link_libraries(MacCleaner PRIVATE
         ${COCOA_FRAMEWORK} ${QUARTZ_FRAMEWORK} ${UTTYPE_FRAMEWORK}
-        ${PHOTOS_FRAMEWORK} ${IMAGEIO_FRAMEWORK} ${QUARTZCORE_FRAMEWORK})
+        ${PHOTOS_FRAMEWORK} ${IMAGEIO_FRAMEWORK} ${QUARTZCORE_FRAMEWORK} ${MAPKIT_FRAMEWORK})
 
     target_compile_options(MacCleaner PRIVATE -fobjc-arc)
 

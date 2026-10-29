@@ -3,6 +3,7 @@
 #import "MCCleanerViewController.h"
 #import "MCLargeFilesViewController.h"
 #import "MCPerformanceViewController.h"
+#import "MCOrganizerViewController.h"
 #import "MCPhotosViewController.h"
 #import "MCTheme.h"
 
@@ -167,7 +168,13 @@
         photoCleaner.symbolName = @"photo.on.rectangle.angled";
         photoCleaner.make = ^{ return (NSViewController *)[[MCPhotosViewController alloc] init]; };
 
-        _tools = @[ cleaner, largeFiles, photoCleaner, performance ];
+        MCToolEntry *organizer = [[MCToolEntry alloc] init];
+        organizer.title = @"File Organizer";
+        organizer.tool = MCToolOrganizer;
+        organizer.symbolName = @"folder.badge.gearshape";
+        organizer.make = ^{ return (NSViewController *)[[MCOrganizerViewController alloc] init]; };
+
+        _tools = @[ cleaner, largeFiles, photoCleaner, organizer, performance ];
 
         _sidebar = [[MCToolSidebarController alloc] init];
         _sidebar.tools = _tools;

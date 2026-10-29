@@ -21,6 +21,7 @@ Gradient gradientFor(MCTool tool) {
         case MCToolLargeFiles: return {0x0f766e, 0x16a34a};  // teal -> green
         case MCToolPhotos: return {0xdb2777, 0xea580c};      // pink -> orange
         case MCToolPerformance: return {0xc2410c, 0xd97706}; // orange -> amber
+        case MCToolOrganizer: return {0x0369a1, 0x4f46e5};   // sky -> indigo
     }
     return {0x6d28d9, 0x2563eb};
 }

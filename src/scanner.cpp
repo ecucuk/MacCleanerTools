@@ -1,4 +1,5 @@
 #include "maccleaner/scanner.hpp"
+#include "maccleaner/walk.hpp"
 
 #include <dirent.h>
 #include <pwd.h>
@@ -6,6 +7,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <cstdlib>
 #include <system_error>
@@ -213,7 +215,7 @@ namespace {
 // The probe deliberately runs with the scanning process's own privileges:
 // grant the app Full Disk Access and TCC-only dirs (e.g. Safari's caches)
 // automatically become visible and cleanable, with no code change.
-bool isSystemProtected(const fs::path& path) {
+bool isProtectedNode(const fs::path& path) {
 #ifdef __APPLE__
     struct stat st {};
     if (::lstat(path.c_str(), &st) != 0) {
@@ -233,6 +235,32 @@ bool isSystemProtected(const fs::path& path) {
     (void)path; // no SIP/TCC elsewhere; plain permissions are handled downstream
 #endif
     return false;
+}
+
+// TCC can also guard a directory *below* an ordinary one: the top of
+// ~/Library/Caches/com.apple.textunderstandingd opens fine, but its Private/
+// subdir is EPERM, and macOS then refuses to trash the whole tree. So the
+// entry counts as protected if any directory under it is. The walk stops at
+// the first hit.
+bool isSystemProtected(const fs::path& path) {
+    if (isProtectedNode(path)) {
+        return true;
+    }
+    std::error_code ec;
+    if (!fs::is_directory(fs::symlink_status(path, ec))) {
+        return false;
+    }
+    std::atomic<bool> found{false};
+    walkFiles(
+        path, [](const fs::path&, const struct stat&) {}, &found, {},
+        [&found](const fs::path& dir) {
+            if (isProtectedNode(dir)) {
+                found = true;
+                return false;
+            }
+            return true;
+        });
+    return found;
 }
 
 FileEntry makeFileEntry(const fs::directory_entry& entry, const std::vector<fs::path>& exclusions) {

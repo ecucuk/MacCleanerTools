@@ -43,13 +43,16 @@ Each finding has one severity: **Detected** (signature match),
   user test the scanner with a harmless file.
 - An entry matches when all its `Matches` match. `MatchAny` needs one
   child, `MatchAll` needs all children.
-- A hex pattern matches when the bytes occur anywhere in the file
-  (`std::search`). An identity matches when the SHA-1 of the whole file
+- A hex pattern matches when the bytes occur anywhere in the file. Patterns
+  use `??`, `{n}`, `{-n}` and `*` wildcards; an entry with an alternation
+  `(a|b)` or an unknown `MatchFile` key is dropped. `MatchFile` constraints
+  sit on each leaf, not on the entry. An identity matches when the SHA-1 of the whole file
   is equal.
-- `MatchFile.NSURLFileSizeKey`, when present, must equal the file size.
-- `MatchFile.NSURLTypeIdentifierKey` (UTI) is ignored. Shortcut: this
-  costs CPU but adds little false-positive risk for patterns of 17 bytes
-  and more.
+- `NSURLFileSizeKey` must equal the file size; `NSURLNameKey` must equal
+  the file name.
+- `NSURLTypeIdentifierKey` `public.unix-executable` and
+  `com.apple.mach-o-dylib` mean "has an execute bit or is Mach-O"; other
+  UTIs are ignored.
 - Files larger than 64 MB are skipped and counted in the report.
 
 ### 2. Persistence (Suspicious or Info)
@@ -60,7 +63,9 @@ Every scan reads the plists in `~/Library/LaunchAgents`,
 
 | Condition | Severity |
 |---|---|
-| Target is unsigned or ad-hoc signed | Suspicious |
+| Target is unsigned | Suspicious |
+| Target is ad-hoc signed and quarantined | Suspicious |
+| Target is ad-hoc signed, not quarantined (Homebrew services) | Info |
 | Target is under `/tmp`, `/private/tmp`, `/Users/Shared` or a hidden directory (a path part that starts with `.`) | Suspicious |
 | Target does not exist | Info |
 | Target is Apple-signed or signed with a Developer ID | no finding |
@@ -69,8 +74,10 @@ A plist that cannot be read gives an Info finding.
 
 ### 3. Quarantined executables (Suspicious)
 
-A Mach-O file in the scan roots that has the `com.apple.quarantine` xattr
-and is unsigned or ad-hoc signed gives a finding. Homebrew does not set
+A Mach-O file with an execute bit in the scan roots that has the
+`com.apple.quarantine` xattr and is unsigned or ad-hoc signed gives a
+finding. (The execute bit keeps out object files, such as Blender's
+`python.o`.) Homebrew does not set
 the xattr, so its binaries do not match.
 
 ### 4. Never touched

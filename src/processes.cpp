@@ -10,7 +10,9 @@
 
 #ifdef __APPLE__
 #include <libproc.h>
+#include <mach/mach.h>
 #include <mach/mach_time.h>
+#include <sys/sysctl.h>
 #include <sys/proc_info.h>
 #endif
 
@@ -199,6 +201,36 @@ bool isSafeToKill(pid_t pid, std::string* reasonIfUnsafe) {
 #endif
 
     return true;
+}
+
+MemoryUsage sampleMemoryUsage() {
+    MemoryUsage usage;
+#ifdef __APPLE__
+    std::uint64_t total = 0;
+    size_t size = sizeof(total);
+    if (::sysctlbyname("hw.memsize", &total, &size, nullptr, 0) != 0) {
+        return usage;
+    }
+
+    vm_statistics64_data_t vm{};
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+    const mach_port_t host = ::mach_host_self();
+    const kern_return_t kr =
+        ::host_statistics64(host, HOST_VM_INFO64, reinterpret_cast<host_info64_t>(&vm), &count);
+    vm_size_t pageSize = 0;
+    const kern_return_t pageKr = ::host_page_size(host, &pageSize);
+    ::mach_port_deallocate(::mach_task_self(), host);
+    if (kr != KERN_SUCCESS || pageKr != KERN_SUCCESS) {
+        return usage;
+    }
+
+    const std::uint64_t appPages =
+        vm.internal_page_count > vm.purgeable_count ? vm.internal_page_count - vm.purgeable_count : 0;
+    const std::uint64_t usedPages = appPages + vm.wire_count + vm.compressor_page_count;
+    usage.totalBytes = total;
+    usage.usedBytes = std::min<std::uint64_t>(usedPages * pageSize, total);
+#endif
+    return usage;
 }
 
 bool killProcess(pid_t pid, KillMode mode, std::string& error) {

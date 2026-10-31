@@ -17,6 +17,7 @@ typedef NS_ENUM(NSInteger, MCTool) {
     MCToolPhotos,
     MCToolPerformance,
     MCToolOrganizer,
+    MCToolAntivirus,
 };
 
 @interface MCTheme : NSObject

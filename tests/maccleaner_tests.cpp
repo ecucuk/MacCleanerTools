@@ -2549,10 +2549,15 @@ void testJsonParsesNested() {
 }
 
 void testJsonEscapes() {
-    const auto v = json::parse(R"("a\"b\\c\né")");
+    // The input is built with kBackslash so the source holds JSON escapes, not
+    // the characters they stand for.
+    const std::string kBackslash(1, '\\');
+    const auto v = json::parse("\"a" + kBackslash + "\"b" + kBackslash + kBackslash + "c" + kBackslash + "n" +
+                               kBackslash + "u00e9\"");
     CHECK(v.has_value() && v->string == "a\"b\\c\n\xC3\xA9");
-    const auto emoji = json::parse(R"("😀")");
+    const auto emoji = json::parse("\"" + kBackslash + "ud83d" + kBackslash + "ude00\"");
     CHECK(emoji.has_value() && emoji->string == "\xF0\x9F\x98\x80");
+    CHECK(!json::parse("\"" + kBackslash + "ud83d\"").has_value()); // unpaired high surrogate
     const auto num = json::parse(" -12.5e1 ");
     CHECK(num.has_value() && num->number == -125.0);
 }

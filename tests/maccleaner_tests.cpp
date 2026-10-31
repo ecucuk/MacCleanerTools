@@ -11,6 +11,7 @@
 #include "maccleaner/processes.hpp"
 #include "maccleaner/cli.hpp"
 #include "maccleaner/format.hpp"
+#include "maccleaner/malware.hpp"
 #include "maccleaner/safety.hpp"
 #include "maccleaner/scanner.hpp"
 #include "maccleaner/walk.hpp"
@@ -59,6 +60,7 @@ int g_failures = 0;
 
 namespace fs = std::filesystem;
 namespace organizer = maccleaner::organizer;
+namespace malware = maccleaner::malware;
 using maccleaner::humanReadableBytes;
 using maccleaner::safety::AllowedRoots;
 using maccleaner::safety::isSafeToDelete;
@@ -2009,6 +2011,86 @@ void testCliParsesOrganize() {
     CHECK(!parseArgs(4, const_cast<char**>(badLayout), error).has_value());
 }
 
+// --- malware ----------------------------------------------------------------
+
+std::vector<std::uint8_t> bytesOf(std::string_view text) {
+    return {text.begin(), text.end()};
+}
+
+malware::Signature bytesRule(std::string_view text) {
+    malware::Signature sig;
+    sig.name = "test";
+    sig.match.op = malware::SignatureMatch::Op::Bytes;
+    sig.match.bytes = bytesOf(text);
+    return sig;
+}
+
+const malware::Sha1Digest kNoSha1{};
+
+void testMalwareMatchBytes() {
+    const auto rule = malware::Signature{"t", std::nullopt, {malware::SignatureMatch::Op::Bytes, *malware::parseHex("3A62696E3A"), {}}};
+    CHECK(malware::matchSignature(rule, bytesOf("xx:bin:yy"), kNoSha1));
+    CHECK(!malware::matchSignature(rule, bytesOf("xx:bix:yy"), kNoSha1));
+}
+
+void testMalwareMatchSha1() {
+    malware::Sha1Digest digest{};
+    digest[0] = 0xab;
+    malware::Signature sig;
+    sig.match.op = malware::SignatureMatch::Op::Sha1;
+    sig.match.bytes.assign(digest.begin(), digest.end());
+    CHECK(malware::matchSignature(sig, bytesOf("anything"), digest));
+    CHECK(!malware::matchSignature(sig, bytesOf("anything"), kNoSha1));
+}
+
+void testMalwareMatchAnyAll() {
+    malware::Signature sig;
+    sig.match.children = {bytesRule("miss").match, bytesRule("hit").match};
+    sig.match.op = malware::SignatureMatch::Op::Any;
+    CHECK(malware::matchSignature(sig, bytesOf("a hit"), kNoSha1));
+    sig.match.op = malware::SignatureMatch::Op::All;
+    CHECK(!malware::matchSignature(sig, bytesOf("a hit"), kNoSha1));
+    CHECK(malware::matchSignature(sig, bytesOf("a hit, a miss"), kNoSha1));
+}
+
+void testMalwareSizeFilter() {
+    auto sig = bytesRule("abc");
+    sig.size = 5;
+    CHECK(malware::matchSignature(sig, bytesOf("abcde"), kNoSha1));
+    CHECK(!malware::matchSignature(sig, bytesOf("abcdef"), kNoSha1));
+}
+
+// An empty pattern or group would otherwise match every file on disk.
+void testMalwareEmptyPatternNeverMatches() {
+    CHECK(!malware::matchSignature(bytesRule(""), bytesOf("abc"), kNoSha1));
+    malware::Signature group;
+    group.match.op = malware::SignatureMatch::Op::All;
+    CHECK(!malware::matchSignature(group, bytesOf("abc"), kNoSha1));
+    group.match.op = malware::SignatureMatch::Op::Any;
+    CHECK(!malware::matchSignature(group, bytesOf("abc"), kNoSha1));
+}
+
+void testMalwareParseHex() {
+    const auto parsed = malware::parseHex("3a6C");
+    CHECK(parsed.has_value() && *parsed == (std::vector<std::uint8_t>{0x3a, 0x6c}));
+    CHECK(!malware::parseHex("abc").has_value());
+    CHECK(!malware::parseHex("zz").has_value());
+}
+
+// Built from two halves so this source file is not itself flagged by AV.
+std::string eicarText() {
+    return std::string("X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-") + "ANTIVIRUS-TEST-FILE!$H+H*";
+}
+
+void testMalwareEicar() {
+    const auto text = eicarText();
+    CHECK_EQ(text.size(), std::size_t{68});
+    const auto sig = malware::eicarSignature();
+    CHECK_EQ(sig.name, std::string("EICAR-Test-File"));
+    CHECK(malware::matchSignature(sig, bytesOf(text), kNoSha1));
+    CHECK(!malware::matchSignature(sig, bytesOf("harmless"), kNoSha1));
+}
+
 int main() {
     testHumanReadableBytes();
 
@@ -2124,6 +2206,13 @@ int main() {
     testPlanHoldsUnresolvedPlaces();
     testResolvePlacesCancelStopsThrottlePause();
     testPlanKeepsSidecarsWithPhoto();
+    testMalwareMatchBytes();
+    testMalwareMatchSha1();
+    testMalwareMatchAnyAll();
+    testMalwareSizeFilter();
+    testMalwareEmptyPatternNeverMatches();
+    testMalwareParseHex();
+    testMalwareEicar();
 
     if (g_failures == 0) {
         std::cout << "All tests passed.\n";

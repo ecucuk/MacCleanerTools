@@ -15,6 +15,9 @@ behind one sidebar:
   `Documents` and `Other`. Photos go into a content category (Vision) or a
   place (country / province / city from their GPS), then year and month.
   Preview it as folders or on a map before anything moves.
+- **Updater** — list outdated Homebrew, MacPorts, App Store and Sparkle
+  apps in one place. Upgrade the selected Homebrew items in place; open the
+  App Store or the app for the others.
 - **Performance** — a live view of your processes by CPU, memory and
   uptime, with heavy consumers flagged, guarded Quit / Force Quit, and a
   one-click **Optimize** that finds processes worth reclaiming.
@@ -86,6 +89,8 @@ build/mac_cleaner photos --under=~/Pictures --distance=3 --blur=50
 build/mac_cleaner organize --under=~/Pictures/Unsorted               # dry run: where each file would go
 build/mac_cleaner organize --under=~/Pictures/Unsorted --by=place    # photos by country/province/city
 build/mac_cleaner organize --under=~/Pictures/Unsorted --dest=~/Pictures/Sorted --apply
+build/mac_cleaner updates                        # outdated software from every source
+build/mac_cleaner updates --upgrade wget firefox # upgrade these Homebrew items
 build/mac_cleaner optimize                       # report reclaimable processes
 build/mac_cleaner optimize --apply               # and terminate them (SIGTERM)
 ```
@@ -192,6 +197,30 @@ and shows where it would go:
 **Organize** asks first, then moves the files. Nothing is overwritten: when a
 name is taken, the file gets a number (`IMG_1 (2).jpg`). Files that cannot
 be moved are listed afterwards. Empty source folders stay.
+
+**Updater** does nothing until you click **Check**. Then it checks four
+sources:
+
+| Source | How it is found | Where the new version comes from | Action |
+|---|---|---|---|
+| Homebrew | `/opt/homebrew/bin/brew` or `/usr/local/bin/brew` | `brew update`, then `brew outdated --json=v2` | select, then **Update Selected** |
+| MacPorts | `/opt/local/bin/port` | `port outdated` | **Copy Command** (`sudo port upgrade <name>`) |
+| App Store | `Contents/_MASReceipt` in the app | one iTunes lookup for all apps (store of your region) | **Open in App Store** |
+| Sparkle | `SUFeedURL` in the app's Info.plist | the app's appcast | **Open App** |
+
+- **Update Selected** runs `brew upgrade <name>` for one item at a time and
+  shows Waiting / Updating… / Updated / Failed on each row. **Stop** lets the
+  running `brew` finish and starts no more: a killed `brew` can leave a lock
+  or a half-done install.
+- The app never runs `sudo` and never asks for a password. A cask that
+  needs one fails (there is no terminal to ask in); its row offers
+  **Copy Command** so you can run it in Terminal.
+- Appcast items on a `sparkle:channel` (betas) are skipped. An app that a
+  Homebrew cask installed is left to Homebrew, so it is not listed twice.
+  Feeds that are not `https` are not read.
+- Apps from none of these sources are not listed: there is no reliable
+  place to read their latest version from.
+- A missing tool is not an error: its section says "not installed".
 
 **Performance** samples your processes every two seconds and shows CPU %,
 memory, kind (App / System / Background), uptime and pid in a sortable
@@ -374,6 +403,13 @@ allowlist-first rather than denylist-first:
 8. **Dry run is the default for `clean`** (and for `organize`). You always see exactly what
    would be deleted, and its size, before anything happens; `--apply` is a
    separate, explicit step.
+9. **The Updater runs package managers, not a shell.** Every command is an
+   argv for `posix_spawn` with an absolute path, so a name read from brew's
+   JSON or an appcast can never become shell syntax. stdin is `/dev/null`
+   and nothing runs with `sudo`. Network access (iTunes lookup, appcasts)
+   happens only on **Check**, over `https` only, with a 10 s and 5 MB cap
+   per request. Each command has a timeout; on expiry its process group is
+   stopped.
 
 ### Known limitations
 
@@ -413,16 +449,17 @@ allowlist-first rather than denylist-first:
 ## Layout
 
 ```text
-include/maccleaner/   public headers (types, safety, scanner, cleaner, trash, cli, format)
+include/maccleaner/   public headers (types, safety, scanner, cleaner, trash, cli, format,
+                      updater, json)
 src/                  core implementation + CLI front end (main.cpp)
-src/platform/         OS-specific Trash backend (trash_mac.mm / trash_fallback.cpp)
+src/platform/         OS-specific backends (trash, image, organizer, updater: *_mac.mm / *_fallback.cpp)
 src/gui/              AppKit front end: MCMainWindowController = sidebar shell,
                       MCCleanerViewController / MCLargeFilesViewController /
                       MCPerformanceViewController / MCPhotosViewController /
-                      MCOrganizerViewController = tools,
+                      MCOrganizerViewController / MCUpdaterViewController = tools,
                       MCOptimizeSheetController = the Optimize review sheet,
                       MCScanModel / MCBigFilesModel / MCProcessModel /
-                      MCPhotoModel / MCOrganizerModel =
+                      MCPhotoModel / MCOrganizerModel / MCUpdaterModel =
                       core wrappers + threading,
                       main.mm = NSApplication
 src/gui/viz/          SwiftUI Activity window (own static lib, bridged via

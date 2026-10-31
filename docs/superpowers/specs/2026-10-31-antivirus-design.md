@@ -66,7 +66,8 @@ Every scan reads the plists in `~/Library/LaunchAgents`,
 | Target is unsigned | Suspicious |
 | Target is ad-hoc signed and quarantined | Suspicious |
 | Target is ad-hoc signed, not quarantined (Homebrew services) | Info |
-| Target is under `/tmp`, `/private/tmp`, `/Users/Shared` or a hidden directory (a path part that starts with `.`) | Suspicious |
+| Target is under `/tmp`, `/private/tmp` or `/Users/Shared` | Suspicious |
+| Target is unsigned or ad-hoc signed and in a hidden directory (a path part that starts with `.`) | Suspicious |
 | Target does not exist | Info |
 | Target is Apple-signed or signed with a Developer ID | no finding |
 

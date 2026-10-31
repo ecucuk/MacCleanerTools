@@ -220,7 +220,7 @@ took about 5½ minutes.
 |---|---|---|
 | Detected | Signature | A rule from `XProtect.plist` (or the built-in EICAR test rule) matches the file |
 | Suspicious | Quarantine | An executable Mach-O file has `com.apple.quarantine` and is unsigned or ad-hoc signed |
-| Suspicious | Persistence | A LaunchAgent/LaunchDaemon starts an unsigned program, a downloaded ad-hoc signed program, or one under `/tmp`, `/Users/Shared` or a hidden folder |
+| Suspicious | Persistence | A LaunchAgent/LaunchDaemon starts an unsigned program, a downloaded ad-hoc signed program, any program under `/tmp` or `/Users/Shared`, or an unsigned/ad-hoc one in a hidden folder |
 | Info | Persistence | The plist is unreadable, names no program or a relative one, the program is missing, or it is ad-hoc signed but not downloaded (normal for Homebrew services) |
 
 - **Signatures.** The rules come from

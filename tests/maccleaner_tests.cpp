@@ -2240,7 +2240,7 @@ void testScanMalwarePersistence() {
     };
     CHECK(severityOf("unsigned.plist") == malware::Severity::Suspicious);
     CHECK(severityOf("tmp.plist") == malware::Severity::Suspicious);
-    CHECK(severityOf("hidden.plist") == malware::Severity::Suspicious);
+    CHECK(!severityOf("hidden.plist").has_value()); // Developer-signed: a dot-dir alone is not enough
     CHECK(severityOf("missing.plist") == malware::Severity::Info);
     CHECK(severityOf("empty.plist") == malware::Severity::Info);
     CHECK(severityOf("relative.plist") == malware::Severity::Info);
@@ -2250,7 +2250,7 @@ void testScanMalwarePersistence() {
     CHECK(severityOf("adhocquarantined.plist") == malware::Severity::Suspicious);
     CHECK(!severityOf("good.plist").has_value());
     CHECK(!severityOf("readme.txt").has_value());
-    CHECK_EQ(report.findings.size(), std::size_t{9});
+    CHECK_EQ(report.findings.size(), std::size_t{8});
 }
 
 void testScanMalwareSkipsUnreadable() {
@@ -2435,6 +2435,88 @@ void testCliParsesMalware() {
     CHECK(!parseArgs(3, const_cast<char**>(empty), error).has_value());
 }
 
+// Review fix: the step cap used to count every start of the first literal, so
+// a common opcode (48 8B) seen 4096+ times hid a real match further on.
+void testMalwarePatternManyFirstLiteralHits() {
+    std::string content;
+    for (int i = 0; i < 5000; ++i) content += "\x48\x8b";
+    content += std::string("\x48\x8b") + "xxxxx" + "\x48\x8d\x5d\xb8";
+    CHECK(malware::matchSignature(patternRule("488B??????????488D5DB8"), bytesOf(content), kNoSha1));
+    CHECK(malware::matchSignature(patternRule("488B*488D5DB8"), bytesOf(content), kNoSha1));
+    CHECK(!malware::matchSignature(patternRule("488B*488D5DB9"), bytesOf(content), kNoSha1));
+}
+
+// Review fix: dot-directories are normal for developer tools (~/.cargo/bin);
+// only an unsigned or ad-hoc program there is suspicious.
+void testScanMalwareHiddenDirNeedsUnsignedTarget() {
+    ScratchTree tree;
+    const fs::path agents = tree.root() / "agents";
+    fs::create_directories(agents);
+    std::ofstream(agents / "cargo.plist") << "plist";
+    std::ofstream(agents / "dropper.plist") << "plist";
+    auto platform = fakePlatform();
+    platform.readLaunchTarget = [](const fs::path& plist) {
+        return std::optional<std::string>(plist.filename() == "cargo.plist" ? "/Users/x/.cargo/bin/tool"
+                                                                            : "/Users/x/.hidden/dropper");
+    };
+    platform.signingStatus = [](const fs::path& p) {
+        return p.filename() == "tool" ? malware::SigningStatus::DeveloperSigned : malware::SigningStatus::Unsigned;
+    };
+    const auto report = malware::scanMalware({}, {agents}, {}, platform);
+    CHECK(findingFor(report, "cargo.plist") == nullptr);
+    const auto* dropper = findingFor(report, "dropper.plist");
+    CHECK(dropper != nullptr && dropper->severity == malware::Severity::Suspicious);
+}
+
+// Review fix: one *.plist symlink that cannot be stat'ed used to end the
+// directory loop, hiding every plist after it.
+void testScanMalwarePersistenceSurvivesBadSymlink() {
+    ScratchTree tree;
+    const fs::path agents = tree.root() / "agents";
+    const fs::path locked = tree.root() / "locked";
+    fs::create_directories(agents);
+    fs::create_directories(locked);
+    std::ofstream(locked / "x.plist") << "plist";
+    for (int i = 0; i < 20; ++i) {
+        fs::create_symlink(locked / "x.plist", agents / ("bad" + std::to_string(i) + ".plist"));
+        std::ofstream(agents / ("good" + std::to_string(i) + ".plist")) << "plist";
+    }
+    fs::permissions(locked, fs::perms::none);
+    auto platform = fakePlatform(); // unreadable target -> one Info per audited plist
+    const auto report = malware::scanMalware({}, {agents}, {}, platform);
+    fs::permissions(locked, fs::perms::owner_all);
+    int good = 0;
+    for (const auto& finding : report.findings) good += finding.path.filename().string().starts_with("good");
+    CHECK_EQ(good, 20);
+}
+
+void testCliTrashOnlyForMalware() {
+    CliParseError error;
+    const char* clean[] = {"mac_cleaner", "clean", "--trash", "--yes"};
+    CHECK(!parseArgs(4, const_cast<char**>(clean), error).has_value());
+    const char* optimize[] = {"mac_cleaner", "optimize", "--trash"};
+    CHECK(!parseArgs(3, const_cast<char**>(optimize), error).has_value());
+}
+
+#if defined(__APPLE__)
+// Review fix: a launchd plist whose Program has a lone UTF-16 surrogate makes
+// -UTF8String return NULL; std::string(NULL) crashed the scan.
+void testReadLaunchTargetBadString() {
+    ScratchTree tree;
+    const auto bytes = malware::parsePattern(
+        "62706c6973743030d101025750726f6772616d61d800080b13000000000000010100000000000000030000000000000000000000"
+        "0000000016");
+    CHECK(bytes.has_value());
+    const fs::path plist = tree.root() / "bad.plist";
+    {
+        std::ofstream out(plist, std::ios::binary);
+        out.write(reinterpret_cast<const char*>((*bytes)[0].bytes.data()),
+                  static_cast<std::streamsize>((*bytes)[0].bytes.size()));
+    }
+    CHECK(!malware::defaultMalwarePlatform().readLaunchTarget(plist).has_value());
+}
+#endif
+
 int main() {
     testHumanReadableBytes();
 
@@ -2566,6 +2648,13 @@ int main() {
     testScanMalwareCancelled();
     testScanMalwareSkipsLargeFiles();
     testTrashFindingRefusesUnsafe();
+    testMalwarePatternManyFirstLiteralHits();
+    testScanMalwareHiddenDirNeedsUnsignedTarget();
+    testScanMalwarePersistenceSurvivesBadSymlink();
+    testCliTrashOnlyForMalware();
+#if defined(__APPLE__)
+    testReadLaunchTargetBadString();
+#endif
     testCliParsesMalware();
 #if defined(__APPLE__)
     testSigningStatusReal();

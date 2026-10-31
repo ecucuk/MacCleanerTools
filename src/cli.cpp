@@ -2,6 +2,7 @@
 
 #include "maccleaner/bigfiles.hpp" // parseSizeSpec
 
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <iostream>
@@ -227,6 +228,12 @@ std::optional<CliOptions> parseArgs(int argc, char** argv, CliParseError& error)
         }
     }
 
+    // --trash means "apply" only for malware; elsewhere it would clean or kill.
+    if ((options.command != Command::Malware) &&
+        std::find(args.begin(), args.end(), std::string_view("--trash")) != args.end()) {
+        error.message = "--trash is only valid for the malware command";
+        return std::nullopt;
+    }
     if (options.command == Command::Organize && options.under.empty()) {
         error.message = "organize needs --under=<folder>";
         return std::nullopt;

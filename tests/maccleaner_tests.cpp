@@ -2374,6 +2374,25 @@ void testUpgradeCommand() {
     CHECK(runner.calls.size() == 1 && runner.calls[0] == updater::upgradeCommand(env, cask));
 }
 
+void testCliParsesUpdates() {
+    using maccleaner::Command;
+    using maccleaner::parseArgs;
+    maccleaner::CliParseError error;
+    const char* list[] = {"mac_cleaner", "updates"};
+    const auto listed = parseArgs(2, const_cast<char**>(list), error);
+    CHECK(listed.has_value() && listed->command == Command::Updates && listed->upgradeNames.empty());
+
+    const char* upgrade[] = {"mac_cleaner", "updates", "--upgrade", "wget", "firefox"};
+    const auto upgraded = parseArgs(5, const_cast<char**>(upgrade), error);
+    CHECK(upgraded.has_value() &&
+          upgraded->upgradeNames == (std::vector<std::string>{"wget", "firefox"}));
+
+    const char* noNames[] = {"mac_cleaner", "updates", "--upgrade"};
+    CHECK(!parseArgs(3, const_cast<char**>(noNames), error).has_value());
+    const char* wrongCommand[] = {"mac_cleaner", "scan", "--upgrade", "wget"};
+    CHECK(!parseArgs(4, const_cast<char**>(wrongCommand), error).has_value());
+}
+
 int main() {
     testHumanReadableBytes();
 
@@ -2509,6 +2528,7 @@ int main() {
     testCheckAppStoreBatchesLookup();
     testCheckCancelSkipsRemainingSources();
     testUpgradeCommand();
+    testCliParsesUpdates();
 
     if (g_failures == 0) {
         std::cout << "All tests passed.\n";

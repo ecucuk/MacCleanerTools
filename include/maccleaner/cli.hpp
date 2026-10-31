@@ -18,6 +18,7 @@ enum class Command {
     Photos,     // report duplicate and blurry photos under a root
     Optimize,   // find (and with --apply, terminate) reclaimable processes
     Organize,   // sort a folder into Photos/Videos/Music/Documents/Other (--apply moves)
+    Updates,    // list outdated software; --upgrade <name>... upgrades brew items
     Help,
 };
 
@@ -44,6 +45,9 @@ struct CliOptions {
     // organize options (`under` is the required source folder).
     std::string dest; // empty = the source folder itself
     organizer::PhotoLayout photoLayout = organizer::PhotoLayout::Content;
+
+    // updates options: brew items to upgrade (empty = list only).
+    std::vector<std::string> upgradeNames;
 };
 
 struct CliParseError {

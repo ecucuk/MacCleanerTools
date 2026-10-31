@@ -9,6 +9,7 @@
 #include "maccleaner/safety.hpp"
 #include "maccleaner/scanner.hpp"
 #include "maccleaner/trash.hpp"
+#include "maccleaner/updater.hpp"
 
 #include <unistd.h>
 
@@ -398,6 +399,90 @@ int runClean(const CliOptions& options) {
     return failures == 0 ? 0 : 1;
 }
 
+int runUpdates(const CliOptions& options) {
+    using namespace maccleaner::updater;
+    Environment env = defaultEnvironment();
+
+    if (!options.upgradeNames.empty()) {
+        if (env.brewPath.empty()) {
+            std::cerr << "error: Homebrew is not installed\n";
+            return 2;
+        }
+        // Only Homebrew is upgraded here, so skip the other sources' checks.
+        env.portPath.clear();
+        env.appFolders.clear();
+        std::cout << "Checking Homebrew...\n";
+        const CheckResult check = checkUpdates(runCommand, env, nullptr);
+        if (!check.sources.front().error.empty()) {
+            std::cerr << "error: brew outdated failed: " << check.sources.front().error << "\n";
+            return 1;
+        }
+        std::vector<OutdatedItem> selected;
+        for (const auto& name : options.upgradeNames) {
+            const auto it = std::find_if(check.items.begin(), check.items.end(),
+                                         [&](const OutdatedItem& item) { return item.name == name; });
+            if (it == check.items.end()) {
+                std::cerr << "error: " << name << " is not an outdated Homebrew item\n";
+                return 2;
+            }
+            if (it->pinned) {
+                std::cerr << "error: " << name << " is pinned (brew unpin " << name << " first)\n";
+                return 2;
+            }
+            selected.push_back(*it);
+        }
+        int failed = 0;
+        for (const auto& item : selected) {
+            std::cout << "Upgrading " << item.name << " (" << item.installedVersion << " -> " << item.latestVersion
+                      << ")... " << std::flush;
+            const CommandResult r = upgradeBrew(runCommand, env, item);
+            if (r.exitCode == 0) {
+                std::cout << "ok\n";
+                continue;
+            }
+            ++failed;
+            std::string last = r.output;
+            while (!last.empty() && (last.back() == '\n' || last.back() == ' ')) {
+                last.pop_back();
+            }
+            last = last.substr(last.find_last_of('\n') == std::string::npos ? 0 : last.find_last_of('\n') + 1);
+            std::cout << "failed: " << (last.empty() ? "exit code " + std::to_string(r.exitCode) : last) << "\n";
+            std::cout << "  try in Terminal: " << manualCommand(item) << "\n";
+        }
+        return failed == 0 ? 0 : 1;
+    }
+
+    std::cout << "Checking for updates (brew update, App Store and appcast lookups)...\n";
+    const CheckResult check = checkUpdates(runCommand, env, nullptr);
+    for (const auto& status : check.sources) {
+        std::cout << "\n== " << toString(status.source) << " ==\n";
+        if (!status.available) {
+            std::cout << "  (not installed)\n";
+            continue;
+        }
+        if (!status.error.empty()) {
+            std::cout << "  error: " << status.error << "\n";
+        }
+        bool any = false;
+        for (const auto& item : check.items) {
+            if (item.source != status.source) {
+                continue;
+            }
+            any = true;
+            std::cout << "  " << item.name << "  " << item.installedVersion << " -> " << item.latestVersion;
+            if (item.isCask) std::cout << "  [cask]";
+            if (item.pinned) std::cout << "  [pinned]";
+            if (!item.appPath.empty()) std::cout << "  " << item.appPath;
+            if (item.source == Source::MacPorts) std::cout << "  (" << manualCommand(item) << ")";
+            std::cout << "\n";
+        }
+        if (!any && status.error.empty()) {
+            std::cout << "  (up to date)\n";
+        }
+    }
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -428,6 +513,8 @@ int main(int argc, char** argv) {
             return runOptimize(options);
         case Command::Organize:
             return runOrganize(options);
+        case Command::Updates:
+            return runUpdates(options);
     }
     return 0;
 }

@@ -50,6 +50,7 @@ set(MACCLEANER_CORE_SOURCES
     src/organizer.cpp
     src/photos.cpp
     src/json.cpp
+    src/updater.cpp
 )
 
 set(MACCLEANER_APPLE_SOURCES)

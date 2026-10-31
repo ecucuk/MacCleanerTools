@@ -15,6 +15,7 @@
 #include "maccleaner/safety.hpp"
 #include "maccleaner/scanner.hpp"
 #include "maccleaner/walk.hpp"
+#include "maccleaner/updater.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -61,6 +62,7 @@ int g_failures = 0;
 namespace fs = std::filesystem;
 namespace organizer = maccleaner::organizer;
 namespace json = maccleaner::json;
+namespace updater = maccleaner::updater;
 using maccleaner::humanReadableBytes;
 using maccleaner::safety::AllowedRoots;
 using maccleaner::safety::isSafeToDelete;
@@ -2047,6 +2049,93 @@ void testJsonRejectsMalformed() {
     CHECK(json::parse(std::string(10, '[') + std::string(10, ']')).has_value());
 }
 
+// --- updater: versions and parsers ------------------------------------------
+
+void testCompareVersions() {
+    using updater::compareVersions;
+    CHECK(compareVersions("1.10", "1.9") > 0);
+    CHECK(compareVersions("1.9", "1.10") < 0);
+    CHECK(compareVersions("1.0", "1") == 0);
+    CHECK(compareVersions("1.0", "1.0.0") == 0);
+    CHECK(compareVersions("2.0b1", "2.0") < 0);
+    CHECK(compareVersions("2.0", "2.0b1") > 0);
+    CHECK(compareVersions("6.43", "6.5") > 0);
+    CHECK(compareVersions("1.0_1", "1.0_0") > 0);
+    CHECK(compareVersions("2.0B1", "2.0b1") == 0);
+    CHECK(compareVersions("99999999999999999999999.1", "99999999999999999999999.0") > 0); // no overflow
+}
+
+const char* kBrewOutdatedJson = R"({"formulae":[{"name":"wget","installed_versions":["1.21.2","1.21.3"],"current_version":"1.21.4","pinned":false},{"name":"node","installed_versions":["20.1"],"current_version":"21.0","pinned":true}],"casks":[{"name":"firefox","installed_versions":["120.0"],"current_version":"121.0"}]})";
+
+void testBrewOutdatedParsesFormulaeAndCasks() {
+    const auto items = updater::parseBrewOutdated(kBrewOutdatedJson);
+    CHECK_EQ(items.size(), std::size_t(3));
+    if (items.size() != 3) return;
+    CHECK(items[0].source == updater::Source::Homebrew);
+    CHECK_EQ(items[0].name, std::string("wget"));
+    CHECK_EQ(items[0].installedVersion, std::string("1.21.3"));
+    CHECK_EQ(items[0].latestVersion, std::string("1.21.4"));
+    CHECK(!items[0].isCask && !items[0].pinned);
+    CHECK(items[1].pinned);
+    CHECK_EQ(items[2].name, std::string("firefox"));
+    CHECK(items[2].isCask);
+}
+
+void testBrewOutdatedSkipsLeadingNoise() {
+    const auto items = updater::parseBrewOutdated(std::string("Warning: something {odd}\n") + kBrewOutdatedJson);
+    CHECK_EQ(items.size(), std::size_t(3));
+    CHECK(updater::parseBrewOutdated(R"({"formulae":[],"casks":[]})").empty());
+    CHECK(updater::parseBrewOutdated("Error: no JSON here").empty());
+    CHECK(updater::parseBrewOutdated(R"({"formulae":[{"name":)").empty());
+}
+
+void testBrewCaskApps() {
+    const auto apps = updater::parseBrewCaskApps(
+        R"({"formulae":[],"casks":[{"token":"linearmouse","artifacts":[{"app":["LinearMouse.app"]},{"zap":[]}]},)"
+        R"({"token":"odd","artifacts":[{"app":[{"target":"X.app"}]}]}]})");
+    CHECK_EQ(apps.size(), std::size_t(1));
+    CHECK(apps.count("LinearMouse.app") == 1);
+    CHECK(updater::parseBrewCaskApps("garbage").empty());
+}
+
+void testPortOutdated() {
+    const auto items = updater::parsePortOutdated(
+        "The following installed ports are outdated:\n"
+        "curl                           8.4.0_0 < 8.5.0_0\n"
+        "git  2.42.0_1 < 2.43.0_0\n");
+    CHECK_EQ(items.size(), std::size_t(2));
+    if (items.size() != 2) return;
+    CHECK(items[0].source == updater::Source::MacPorts);
+    CHECK_EQ(items[0].name, std::string("curl"));
+    CHECK_EQ(items[0].installedVersion, std::string("8.4.0_0"));
+    CHECK_EQ(items[0].latestVersion, std::string("8.5.0_0"));
+    CHECK_EQ(items[1].name, std::string("git"));
+    CHECK(updater::parsePortOutdated("No installed ports are outdated.\n").empty());
+}
+
+void testItunesLookup() {
+    const auto versions = updater::parseItunesLookup(
+        R"({"resultCount":2,"results":[{"trackId":6443819966,"version":"6.43"},{"trackId":1,"version":"2.0"}]})");
+    CHECK_EQ(versions.size(), std::size_t(2));
+    CHECK(versions.count("6443819966") && versions.at("6443819966") == "6.43");
+    CHECK(versions.count("1") && versions.at("1") == "2.0");
+    CHECK(updater::parseItunesLookup("<html>").empty());
+}
+
+void testAppcastSkipsChannels() {
+    const auto latest = updater::parseAppcast(R"(<rss><channel><title>X</title>
+<item><title>Beta</title><sparkle:channel>beta</sparkle:channel>
+  <enclosure url="https://x/b.zip" sparkle:version="200" sparkle:shortVersionString="2.0b"/></item>
+<item><title>1.5</title><enclosure url="https://x/a.zip" sparkle:version="150" sparkle:shortVersionString="1.5" length="1"/></item>
+<item><title>1.4</title><sparkle:version>140</sparkle:version><sparkle:shortVersionString>1.4</sparkle:shortVersionString></item>
+</channel></rss>)");
+    CHECK(latest.has_value());
+    if (!latest) return;
+    CHECK_EQ(latest->version, std::string("150"));
+    CHECK_EQ(latest->shortVersion, std::string("1.5"));
+    CHECK(!updater::parseAppcast("<rss><channel></channel></rss>").has_value());
+}
+
 int main() {
     testHumanReadableBytes();
 
@@ -2165,6 +2254,13 @@ int main() {
     testJsonParsesNested();
     testJsonEscapes();
     testJsonRejectsMalformed();
+    testCompareVersions();
+    testBrewOutdatedParsesFormulaeAndCasks();
+    testBrewOutdatedSkipsLeadingNoise();
+    testBrewCaskApps();
+    testPortOutdated();
+    testItunesLookup();
+    testAppcastSkipsChannels();
 
     if (g_failures == 0) {
         std::cout << "All tests passed.\n";

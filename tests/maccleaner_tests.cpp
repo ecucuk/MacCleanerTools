@@ -11,6 +11,7 @@
 #include "maccleaner/processes.hpp"
 #include "maccleaner/cli.hpp"
 #include "maccleaner/format.hpp"
+#include "maccleaner/json.hpp"
 #include "maccleaner/safety.hpp"
 #include "maccleaner/scanner.hpp"
 #include "maccleaner/walk.hpp"
@@ -59,6 +60,7 @@ int g_failures = 0;
 
 namespace fs = std::filesystem;
 namespace organizer = maccleaner::organizer;
+namespace json = maccleaner::json;
 using maccleaner::humanReadableBytes;
 using maccleaner::safety::AllowedRoots;
 using maccleaner::safety::isSafeToDelete;
@@ -2009,6 +2011,42 @@ void testCliParsesOrganize() {
     CHECK(!parseArgs(4, const_cast<char**>(badLayout), error).has_value());
 }
 
+// --- json ------------------------------------------------------------------
+
+void testJsonParsesNested() {
+    const auto v = json::parse(R"({"a":[1,true,null,{"b":"x"}]})");
+    CHECK(v.has_value());
+    if (!v) return;
+    const json::Value* a = v->find("a");
+    CHECK(a != nullptr && a->array.size() == 4);
+    if (!a || a->array.size() != 4) return;
+    CHECK_EQ(a->array[0].number, 1.0);
+    CHECK(a->array[1].type == json::Value::Type::Bool && a->array[1].boolean);
+    CHECK(a->array[2].type == json::Value::Type::Null);
+    CHECK_EQ(a->array[3].str("b"), std::string("x"));
+    CHECK(v->find("missing") == nullptr);
+    CHECK_EQ(v->str("a"), std::string()); // not a string
+}
+
+void testJsonEscapes() {
+    const auto v = json::parse(R"("a\"b\\c\né")");
+    CHECK(v.has_value() && v->string == "a\"b\\c\n\xC3\xA9");
+    const auto emoji = json::parse(R"("😀")");
+    CHECK(emoji.has_value() && emoji->string == "\xF0\x9F\x98\x80");
+    const auto num = json::parse(" -12.5e1 ");
+    CHECK(num.has_value() && num->number == -125.0);
+}
+
+void testJsonRejectsMalformed() {
+    CHECK(!json::parse("{").has_value());
+    CHECK(!json::parse("[1,]").has_value());
+    CHECK(!json::parse("{} x").has_value());
+    CHECK(!json::parse("").has_value());
+    CHECK(!json::parse(R"({"a" 1})").has_value());
+    CHECK(!json::parse(std::string(100, '[') + std::string(100, ']')).has_value()); // depth cap
+    CHECK(json::parse(std::string(10, '[') + std::string(10, ']')).has_value());
+}
+
 int main() {
     testHumanReadableBytes();
 
@@ -2124,6 +2162,9 @@ int main() {
     testPlanHoldsUnresolvedPlaces();
     testResolvePlacesCancelStopsThrottlePause();
     testPlanKeepsSidecarsWithPhoto();
+    testJsonParsesNested();
+    testJsonEscapes();
+    testJsonRejectsMalformed();
 
     if (g_failures == 0) {
         std::cout << "All tests passed.\n";

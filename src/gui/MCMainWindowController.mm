@@ -4,6 +4,7 @@
 #import "MCLargeFilesViewController.h"
 #import "MCPerformanceViewController.h"
 #import "MCOrganizerViewController.h"
+#import "MCUpdaterViewController.h"
 #import "MCPhotosViewController.h"
 #import "MCTheme.h"
 
@@ -174,7 +175,13 @@
         organizer.symbolName = @"folder.badge.gearshape";
         organizer.make = ^{ return (NSViewController *)[[MCOrganizerViewController alloc] init]; };
 
-        _tools = @[ cleaner, largeFiles, photoCleaner, organizer, performance ];
+        MCToolEntry *updater = [[MCToolEntry alloc] init];
+        updater.title = @"Updater";
+        updater.tool = MCToolUpdater;
+        updater.symbolName = @"arrow.triangle.2.circlepath";
+        updater.make = ^{ return (NSViewController *)[[MCUpdaterViewController alloc] init]; };
+
+        _tools = @[ cleaner, largeFiles, photoCleaner, organizer, updater, performance ];
 
         _sidebar = [[MCToolSidebarController alloc] init];
         _sidebar.tools = _tools;

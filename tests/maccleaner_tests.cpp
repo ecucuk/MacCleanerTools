@@ -2182,7 +2182,10 @@ void testScanMalwareSkipsAppleSigned() {
 void testScanMalwareQuarantinedAdhoc() {
     ScratchTree tree;
     std::ofstream(tree.root() / "tool") << kMachOMagic << "code";
+    fs::permissions(tree.root() / "tool", fs::perms::owner_exec, fs::perm_options::add);
     std::ofstream(tree.root() / "notes.txt") << "not mach-o";
+    // A Mach-O object file without an execute bit cannot run (Blender ships one).
+    std::ofstream(tree.root() / "python.o") << kMachOMagic << "object";
     auto platform = fakePlatform();
     platform.signingStatus = [](const fs::path&) { return malware::SigningStatus::AdHoc; };
     platform.hasQuarantine = [](const fs::path&) { return true; };
@@ -2213,6 +2216,8 @@ void testScanMalwarePersistence() {
         {"relative.plist", "relative/x"},
         {"good.plist", "/Applications/Good"},
         {"unreadable.plist", std::nullopt},
+        {"adhoc.plist", "/opt/homebrew/bin/tool"},
+        {"adhocquarantined.plist", "/opt/downloaded"},
     };
     for (const auto& [name, target] : targets) std::ofstream(agents / name) << "plist";
     std::ofstream(agents / "readme.txt") << "not a plist";
@@ -2221,8 +2226,11 @@ void testScanMalwarePersistence() {
     platform.readLaunchTarget = [&](const fs::path& plist) { return targets.at(plist.filename().string()); };
     platform.pathExists = [](const fs::path& p) { return p != "/missing"; };
     platform.signingStatus = [](const fs::path& p) {
-        return p == "/opt/bad" ? malware::SigningStatus::Unsigned : malware::SigningStatus::DeveloperSigned;
+        if (p == "/opt/bad") return malware::SigningStatus::Unsigned;
+        if (p.string().starts_with("/opt/")) return malware::SigningStatus::AdHoc;
+        return malware::SigningStatus::DeveloperSigned;
     };
+    platform.hasQuarantine = [](const fs::path& p) { return p == "/opt/downloaded"; };
     const auto report = malware::scanMalware({}, {agents}, {}, platform);
 
     const auto severityOf = [&](const std::string& name) {
@@ -2237,9 +2245,12 @@ void testScanMalwarePersistence() {
     CHECK(severityOf("empty.plist") == malware::Severity::Info);
     CHECK(severityOf("relative.plist") == malware::Severity::Info);
     CHECK(severityOf("unreadable.plist") == malware::Severity::Info);
+    // Homebrew and self-built tools are ad-hoc signed; only a downloaded one is suspicious.
+    CHECK(severityOf("adhoc.plist") == malware::Severity::Info);
+    CHECK(severityOf("adhocquarantined.plist") == malware::Severity::Suspicious);
     CHECK(!severityOf("good.plist").has_value());
     CHECK(!severityOf("readme.txt").has_value());
-    CHECK_EQ(report.findings.size(), std::size_t{7});
+    CHECK_EQ(report.findings.size(), std::size_t{9});
 }
 
 void testScanMalwareSkipsUnreadable() {
@@ -2377,6 +2388,53 @@ void testLoadXProtectRulesMissingFile() {
 }
 #endif
 
+void testTrashFindingRefusesUnsafe() {
+    ScratchTree tree;
+    AllowedRoots allowed;
+    allowed.add(tree.root());
+    auto platform = fakePlatform();
+    std::string error;
+
+    platform.signingStatus = [](const fs::path&) { return malware::SigningStatus::Apple; };
+    const malware::Finding apple{tree.root() / "child_file.txt", malware::Severity::Suspicious,
+                                 malware::FindingKind::Quarantine, ""};
+    CHECK(!malware::trashFinding(apple, allowed, platform, error));
+    CHECK(!error.empty());
+    CHECK(fs::exists(apple.path));
+
+    platform = fakePlatform();
+    error.clear();
+    const malware::Finding outside{tree.outside() / "secret.txt", malware::Severity::Detected,
+                                   malware::FindingKind::Signature, ""};
+    CHECK(!malware::trashFinding(outside, allowed, platform, error));
+    CHECK(!error.empty());
+    CHECK(fs::exists(outside.path));
+
+    error.clear();
+    const malware::Finding system{"/System/Library/CoreServices/Finder.app", malware::Severity::Detected,
+                                  malware::FindingKind::Signature, ""};
+    CHECK(!malware::trashFinding(system, allowed, platform, error));
+    CHECK(!error.empty());
+}
+
+void testCliParsesMalware() {
+    CliParseError error;
+    const char* argv[] = {"mac_cleaner", "malware", "--path=/a", "--path=/b", "--trash", "--yes"};
+    const auto options = parseArgs(6, const_cast<char**>(argv), error);
+    CHECK(options.has_value());
+    CHECK(options->command == Command::Malware);
+    CHECK(options->paths == (std::vector<std::string>{"/a", "/b"}));
+    CHECK(options->apply);
+    CHECK(options->yes);
+
+    const char* plain[] = {"mac_cleaner", "malware"};
+    const auto defaults = parseArgs(2, const_cast<char**>(plain), error);
+    CHECK(defaults.has_value() && defaults->paths.empty() && !defaults->apply);
+
+    const char* empty[] = {"mac_cleaner", "malware", "--path="};
+    CHECK(!parseArgs(3, const_cast<char**>(empty), error).has_value());
+}
+
 int main() {
     testHumanReadableBytes();
 
@@ -2507,6 +2565,8 @@ int main() {
     testScanMalwareSkipsUnreadable();
     testScanMalwareCancelled();
     testScanMalwareSkipsLargeFiles();
+    testTrashFindingRefusesUnsafe();
+    testCliParsesMalware();
 #if defined(__APPLE__)
     testSigningStatusReal();
     testQuarantineAndSha1Real();

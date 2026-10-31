@@ -64,6 +64,7 @@ void printUsage() {
         "  mac_cleaner photos [--under=<path>] [--distance=<n>] [--blur=<t>]\n"
         "  mac_cleaner optimize [--apply]\n"
         "  mac_cleaner organize --under=<path> [--dest=<path>] [--by=content|place] [--apply] [--yes]\n"
+        "  mac_cleaner malware [--path=<path>]... [--trash] [--yes]\n"
         "\n"
         "Commands:\n"
         "  scan       Report what would be cleaned and how much space it would free (default).\n"
@@ -77,6 +78,8 @@ void printUsage() {
         "             agents). Reports only; pass --apply to terminate them.\n"
         "  organize   Sort a folder into Photos/<Category or Place>/YYYY/YYYY-MM, Videos/YYYY/YYYY-MM,\n"
         "             Music, Documents and Other. A dry run unless --apply; never overwrites.\n"
+        "  malware    Scan for XProtect.plist signatures, quarantined unsigned programs and\n"
+        "             suspicious LaunchAgents/LaunchDaemons. Reports only; not a real-time AV.\n"
         "\n"
         "Options (scan/clean):\n"
         "  --only=<categories>  Comma-separated subset, e.g. --only=caches,derived-data\n"
@@ -109,6 +112,12 @@ void printUsage() {
         "  --apply               Actually move the files.\n"
         "  --yes                 Skip the confirmation prompt.\n"
         "\n"
+        "Options (malware):\n"
+        "  --path=<path>         Folder to scan, repeatable (default: ~/Downloads, ~/Desktop,\n"
+        "                        ~/Applications, /Applications). Launchd plists are always checked.\n"
+        "  --trash               Move Detected and Suspicious files to the Trash after a prompt.\n"
+        "  --yes                 Skip the confirmation prompt.\n"
+        "\n"
         "  --help                 Show this message.\n";
 }
 
@@ -120,13 +129,14 @@ std::optional<CliOptions> parseArgs(int argc, char** argv, CliParseError& error)
     std::size_t index = 0;
     if (!args.empty() && (args[0] == "scan" || args[0] == "clean" || args[0] == "bigfiles" ||
                           args[0] == "processes" || args[0] == "optimize" || args[0] == "photos" ||
-                          args[0] == "organize")) {
+                          args[0] == "organize" || args[0] == "malware")) {
         options.command = (args[0] == "scan")       ? Command::Scan
                           : (args[0] == "clean")     ? Command::Clean
                           : (args[0] == "bigfiles")  ? Command::BigFiles
                           : (args[0] == "processes") ? Command::Processes
                           : (args[0] == "photos")    ? Command::Photos
                           : (args[0] == "organize")  ? Command::Organize
+                          : (args[0] == "malware")   ? Command::Malware
                                                       : Command::Optimize;
         index = 1;
     }
@@ -152,6 +162,14 @@ std::optional<CliOptions> parseArgs(int argc, char** argv, CliParseError& error)
                     error.message = "unknown category: " + std::string(name);
                     return std::nullopt;
                 }
+            }
+        } else if (arg == "--trash") {
+            options.apply = true;
+        } else if (arg.rfind("--path=", 0) == 0) {
+            options.paths.emplace_back(arg.substr(std::string_view("--path=").size()));
+            if (options.paths.back().empty()) {
+                error.message = "--path needs a path";
+                return std::nullopt;
             }
         } else if (arg.rfind("--under=", 0) == 0) {
             options.under = std::string(arg.substr(std::string_view("--under=").size()));

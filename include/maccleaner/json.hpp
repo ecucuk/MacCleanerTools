@@ -27,5 +27,8 @@ struct Value {
 
 // nullopt on malformed input, trailing garbage, or nesting deeper than 64.
 std::optional<Value> parse(std::string_view text);
+// Like parse, but only the value at the start must be complete; text after
+// it is ignored (brew can print warnings after its JSON).
+std::optional<Value> parsePrefix(std::string_view text);
 
 } // namespace maccleaner::json

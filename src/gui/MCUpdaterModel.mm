@@ -61,6 +61,7 @@ NSString *lastLineOf(const std::string &output) {
         _title = toNSString(updater::toString(core.source));
         _available = core.available;
         _error = toNSString(core.error);
+        _skipped = core.skipped;
     }
     return self;
 }

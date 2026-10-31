@@ -163,7 +163,9 @@ NSString *stateText(MCUpdateItem *item) {
     }
     self.banner.value = [NSString stringWithFormat:@"%lu", (unsigned long)pending];
     self.banner.caption = pending == 1 ? @"update available" : @"updates available";
-    self.checkButton.enabled = !busy;
+    // While a check runs, Check Again turns into its Stop.
+    self.checkButton.title = busy && !self.upgrading ? @"Stop" : @"Check Again";
+    self.checkButton.enabled = !self.upgrading;
     self.updateButton.title = self.upgrading ? @"Stop" : @"Update Selected";
     self.updateButton.enabled = self.upgrading || (!busy && self.selectedItems.count > 0);
 
@@ -197,6 +199,9 @@ NSString *stateText(MCUpdateItem *item) {
 
 - (void)check:(id)sender {
     if (self.model.busy) {
+        if (!self.upgrading) {
+            [self.model cancel];
+        }
         return;
     }
     self.statusLabel.stringValue = @"Checking…";
@@ -207,13 +212,16 @@ NSString *stateText(MCUpdateItem *item) {
         }
         [self rebuildRows];
         NSUInteger failedSources = 0;
+        BOOL stopped = NO;
         for (MCUpdateSourceStatus *source in self.model.sources) {
             failedSources += source.error.length > 0 ? 1 : 0;
+            stopped = stopped || source.skipped;
         }
         self.statusLabel.stringValue =
-            failedSources > 0 ? [NSString stringWithFormat:@"Checked. %lu source(s) reported an error.",
-                                                           (unsigned long)failedSources]
-                              : @"Checked.";
+            stopped             ? @"Stopped. Sources marked skipped were not fully checked."
+            : failedSources > 0 ? [NSString stringWithFormat:@"Checked. %lu source(s) reported an error.",
+                                                             (unsigned long)failedSources]
+                                : @"Checked.";
         [self updateState];
     }];
     [self updateState];
@@ -311,6 +319,7 @@ NSString *stateText(MCUpdateItem *item) {
             any = any || item.source == source.source;
         }
         NSString *detail = !source.available         ? @" — not installed"
+                           : source.skipped          ? @" — skipped (stopped)"
                            : source.error.length > 0 ? [@" — " stringByAppendingString:source.error]
                            : any                     ? @""
                                                      : @" — up to date";

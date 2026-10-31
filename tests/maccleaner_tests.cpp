@@ -2393,6 +2393,61 @@ void testCliParsesUpdates() {
     CHECK(!parseArgs(4, const_cast<char**>(wrongCommand), error).has_value());
 }
 
+// --- updater: final-review regressions --------------------------------------
+
+void testBrewOutdatedIgnoresTrailingWarning() {
+    const auto items = updater::parseBrewOutdated(std::string(kBrewOutdatedJson) + "\nWarning: trailing\n");
+    CHECK_EQ(items.size(), std::size_t(3));
+}
+
+void testCheckReportsBrewOutputWithoutJson() {
+    ScratchTree tree;
+    FakeRunner runner;
+    runner.answer = [](const std::vector<std::string>& argv) {
+        if (hasArg(argv, "outdated")) return updater::CommandResult{0, "Error: something odd\n"};
+        return updater::CommandResult{0, ""};
+    };
+    auto env = fakeEnvironment(tree, {});
+    env.brewPath = "/opt/homebrew/bin/brew";
+    const auto r = updater::checkUpdates(runner.fn(), env, [] { return false; });
+    const auto* brew = statusOf(r, updater::Source::Homebrew);
+    CHECK(brew && !brew->error.empty());
+}
+
+void testRunCommandTimesOutAfterChildClosesOutput() {
+    const auto start = std::chrono::steady_clock::now();
+    const auto r = updater::runCommand({"/bin/sh", "-c", "exec >&- 2>&-; sleep 4"}, 1);
+    CHECK_EQ(r.exitCode, -1);
+    CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(3));
+}
+
+void testCheckMarksSkippedSourcesOnCancel() {
+    ScratchTree tree;
+    FakeRunner runner;
+    auto env = fakeEnvironment(tree, {});
+    env.brewPath = "/opt/homebrew/bin/brew";
+    env.portPath = "/opt/local/bin/port";
+    const auto r = updater::checkUpdates(runner.fn(), env, [&] { return !runner.calls.empty(); });
+    const auto* brew = statusOf(r, updater::Source::Homebrew);
+    const auto* store = statusOf(r, updater::Source::AppStore);
+    CHECK(brew && brew->skipped);
+    CHECK(store && store->skipped);
+    const auto full = updater::checkUpdates(runner.fn(), fakeEnvironment(tree, {}), [] { return false; });
+    for (const auto& s : full.sources) CHECK(!s.skipped);
+}
+
+void testCheckSkipsAppStoreAppWithoutShortVersion() {
+    ScratchTree tree;
+    FakeRunner runner;
+    runner.answer = [](const std::vector<std::string>& argv) {
+        if (argv[0] == "/usr/bin/mdls") return updater::CommandResult{0, "111"};
+        if (argv[0] == "/usr/bin/curl") return updater::CommandResult{0, R"({"results":[{"trackId":111,"version":"2.0"}]})"};
+        return updater::CommandResult{0, ""};
+    };
+    const auto env = fakeEnvironment(tree, {{"A.app", {"", "1", ""}}}, {"A.app"});
+    CHECK(updater::checkUpdates(runner.fn(), env, [] { return false; }).items.empty());
+}
+
 int main() {
     testHumanReadableBytes();
 
@@ -2529,6 +2584,11 @@ int main() {
     testCheckCancelSkipsRemainingSources();
     testUpgradeCommand();
     testCliParsesUpdates();
+    testBrewOutdatedIgnoresTrailingWarning();
+    testCheckReportsBrewOutputWithoutJson();
+    testRunCommandTimesOutAfterChildClosesOutput();
+    testCheckMarksSkippedSourcesOnCancel();
+    testCheckSkipsAppStoreAppWithoutShortVersion();
 
     if (g_failures == 0) {
         std::cout << "All tests passed.\n";

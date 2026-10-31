@@ -95,6 +95,7 @@ struct SourceStatus {
     Source source = Source::Homebrew;
     bool available = false; // the tool is installed (always true for apps)
     std::string error;      // "" = checked fine
+    bool skipped = false;   // the check was stopped before this source finished
 };
 
 struct CheckResult {

@@ -75,12 +75,12 @@ int comparePart(const VersionPart& a, const VersionPart& b) {
     return a.text.compare(b.text) < 0 ? -1 : (a.text == b.text ? 0 : 1);
 }
 
-// brew can print warnings before the JSON. The document starts at a line
-// that begins with '{'.
+// brew can print warnings before and after the JSON. The document starts at
+// a line that begins with '{'.
 std::optional<json::Value> parseJsonAfterNoise(std::string_view output) {
     for (std::size_t pos = 0; pos < output.size();) {
         if (output[pos] == '{') {
-            if (auto v = json::parse(output.substr(pos)); v && v->type == json::Value::Type::Object) {
+            if (auto v = json::parsePrefix(output.substr(pos)); v && v->type == json::Value::Type::Object) {
                 return v;
             }
         }
@@ -344,6 +344,10 @@ CommandResult runCommand(const std::vector<std::string>& argv, int timeoutSecond
     ::close(fds[0]);
 
     int status = 0;
+    // EOF is not exit: a child can close its output and keep running.
+    if (!timedOut && !waitWithDeadline(pid, status, deadline)) {
+        timedOut = true;
+    }
     if (timedOut) {
         ::kill(-pid, SIGTERM);
         if (!waitWithDeadline(pid, status, std::chrono::steady_clock::now() + std::chrono::seconds(2))) {
@@ -353,8 +357,6 @@ CommandResult runCommand(const std::vector<std::string>& argv, int timeoutSecond
         }
         result.exitCode = -1;
         return result;
-    }
-    while (::waitpid(pid, &status, 0) < 0 && errno == EINTR) {
     }
     result.exitCode = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
     return result;
@@ -434,7 +436,8 @@ CheckResult checkUpdates(const RunFn& run, const Environment& env, const std::fu
         exec({env.brewPath, "update"}, kBrewUpdateTimeout);
         if (auto r = exec({env.brewPath, "outdated", "--json=v2"}, kCheckTimeout)) {
             auto items = parseBrewOutdated(r->output);
-            if (r->exitCode != 0 && items.empty()) {
+            // No JSON at all must not read as "up to date".
+            if ((r->exitCode != 0 && items.empty()) || !parseJsonAfterNoise(r->output)) {
                 brew.error = describeFailure(*r);
             }
             add(std::move(items));
@@ -444,6 +447,7 @@ CheckResult checkUpdates(const RunFn& run, const Environment& env, const std::fu
             caskApps = parseBrewCaskApps(r->output);
         }
     }
+    brew.skipped = stopped;
     result.sources.push_back(brew);
 
     SourceStatus port{Source::MacPorts, !env.portPath.empty(), ""};
@@ -456,6 +460,7 @@ CheckResult checkUpdates(const RunFn& run, const Environment& env, const std::fu
             }
         }
     }
+    port.skipped = stopped;
     result.sources.push_back(port);
 
     // Split the installed apps: a receipt means App Store, else a feed means Sparkle.
@@ -466,7 +471,9 @@ CheckResult checkUpdates(const RunFn& run, const Environment& env, const std::fu
             continue;
         }
         if (env.exists && env.exists(path + "/Contents/_MASReceipt/receipt")) {
-            storeApps.emplace_back(path, std::move(*info));
+            if (!info->shortVersion.empty()) { // nothing to compare the store version with
+                storeApps.emplace_back(path, std::move(*info));
+            }
         } else if (!info->feedURL.empty()) {
             sparkleApps.emplace_back(path, std::move(*info));
         }
@@ -527,6 +534,7 @@ CheckResult checkUpdates(const RunFn& run, const Environment& env, const std::fu
             }
         }
     }
+    store.skipped = stopped;
     result.sources.push_back(store);
 
     SourceStatus sparkle{Source::Sparkle, true, ""};
@@ -560,6 +568,7 @@ CheckResult checkUpdates(const RunFn& run, const Environment& env, const std::fu
     if (failedFeeds > 0) {
         sparkle.error = std::to_string(failedFeeds) + (failedFeeds == 1 ? " feed" : " feeds") + " could not be read";
     }
+    sparkle.skipped = stopped;
     result.sources.push_back(sparkle);
     return result;
 }

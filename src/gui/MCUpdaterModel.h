@@ -47,6 +47,8 @@ typedef NS_ENUM(NSInteger, MCUpdateRowState) {
 @property(nonatomic, copy, readonly) NSString *title; // "Homebrew", "App Store", ...
 @property(nonatomic, readonly) BOOL available;
 @property(nonatomic, copy, readonly) NSString *error; // empty = fine
+/// The check was stopped before this source finished: its result is incomplete.
+@property(nonatomic, readonly) BOOL skipped;
 @end
 
 @interface MCUpdaterModel : NSObject

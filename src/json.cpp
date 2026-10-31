@@ -31,13 +31,13 @@ class Parser {
 public:
     explicit Parser(std::string_view text) : s_(text) {}
 
-    std::optional<Value> parseDocument() {
+    std::optional<Value> parseDocument(bool allowTrailing) {
         Value v;
         if (!parseValue(v, 0)) {
             return std::nullopt;
         }
         skipSpace();
-        if (pos_ != s_.size()) {
+        if (!allowTrailing && pos_ != s_.size()) {
             return std::nullopt;
         }
         return v;
@@ -239,7 +239,11 @@ private:
 } // namespace
 
 std::optional<Value> parse(std::string_view text) {
-    return Parser(text).parseDocument();
+    return Parser(text).parseDocument(false);
+}
+
+std::optional<Value> parsePrefix(std::string_view text) {
+    return Parser(text).parseDocument(true);
 }
 
 } // namespace maccleaner::json

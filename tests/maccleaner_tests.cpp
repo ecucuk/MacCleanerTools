@@ -2091,6 +2091,143 @@ void testMalwareEicar() {
     CHECK(!malware::matchSignature(sig, bytesOf("harmless"), kNoSha1));
 }
 
+// A platform where nothing is signed, quarantined or missing; tests override
+// the one function they exercise.
+malware::MalwarePlatform fakePlatform() {
+    malware::MalwarePlatform platform;
+    platform.signingStatus = [](const fs::path&) { return malware::SigningStatus::Unknown; };
+    platform.hasQuarantine = [](const fs::path&) { return false; };
+    platform.sha1 = [](std::span<const std::uint8_t>) { return malware::Sha1Digest{}; };
+    platform.readLaunchTarget = [](const fs::path&) { return std::optional<std::string>{}; };
+    platform.pathExists = [](const fs::path&) { return true; };
+    return platform;
+}
+
+const std::string kMachOMagic = "\xcf\xfa\xed\xfe";
+
+const malware::Finding* findingFor(const malware::MalwareReport& report, const std::string& filename) {
+    for (const auto& finding : report.findings) {
+        if (finding.path.filename() == filename) return &finding;
+    }
+    return nullptr;
+}
+
+void testScanMalwareFindsEicar() {
+    ScratchTree tree;
+    std::ofstream(tree.root() / "eicar.txt") << eicarText();
+    const auto report = malware::scanMalware({tree.root()}, {}, {malware::eicarSignature()}, fakePlatform());
+    CHECK_EQ(report.findings.size(), std::size_t{1});
+    const auto* hit = findingFor(report, "eicar.txt");
+    CHECK(hit != nullptr && hit->severity == malware::Severity::Detected &&
+          hit->kind == malware::FindingKind::Signature && hit->reason == "EICAR-Test-File");
+    CHECK(report.filesScanned >= 2);
+}
+
+void testScanMalwareSkipsAppleSigned() {
+    ScratchTree tree;
+    std::ofstream(tree.root() / "apple_tool") << kMachOMagic << eicarText();
+    auto platform = fakePlatform();
+    platform.signingStatus = [](const fs::path&) { return malware::SigningStatus::Apple; };
+    platform.hasQuarantine = [](const fs::path&) { return true; };
+    const auto report = malware::scanMalware({tree.root()}, {}, {malware::eicarSignature()}, platform);
+    CHECK(report.findings.empty());
+}
+
+void testScanMalwareQuarantinedAdhoc() {
+    ScratchTree tree;
+    std::ofstream(tree.root() / "tool") << kMachOMagic << "code";
+    std::ofstream(tree.root() / "notes.txt") << "not mach-o";
+    auto platform = fakePlatform();
+    platform.signingStatus = [](const fs::path&) { return malware::SigningStatus::AdHoc; };
+    platform.hasQuarantine = [](const fs::path&) { return true; };
+    auto report = malware::scanMalware({tree.root()}, {}, {}, platform);
+    CHECK_EQ(report.findings.size(), std::size_t{1});
+    const auto* hit = findingFor(report, "tool");
+    CHECK(hit != nullptr && hit->severity == malware::Severity::Suspicious &&
+          hit->kind == malware::FindingKind::Quarantine);
+
+    platform.hasQuarantine = [](const fs::path&) { return false; };
+    CHECK(malware::scanMalware({tree.root()}, {}, {}, platform).findings.empty());
+
+    platform.hasQuarantine = [](const fs::path&) { return true; };
+    platform.signingStatus = [](const fs::path&) { return malware::SigningStatus::DeveloperSigned; };
+    CHECK(malware::scanMalware({tree.root()}, {}, {}, platform).findings.empty());
+}
+
+void testScanMalwarePersistence() {
+    ScratchTree tree;
+    const fs::path agents = tree.root() / "agents";
+    fs::create_directories(agents);
+    const std::map<std::string, std::optional<std::string>> targets = {
+        {"unsigned.plist", "/opt/bad"},
+        {"tmp.plist", "/tmp/x"},
+        {"hidden.plist", "/Users/x/.hidden/bin"},
+        {"missing.plist", "/missing"},
+        {"empty.plist", ""},
+        {"relative.plist", "relative/x"},
+        {"good.plist", "/Applications/Good"},
+        {"unreadable.plist", std::nullopt},
+    };
+    for (const auto& [name, target] : targets) std::ofstream(agents / name) << "plist";
+    std::ofstream(agents / "readme.txt") << "not a plist";
+
+    auto platform = fakePlatform();
+    platform.readLaunchTarget = [&](const fs::path& plist) { return targets.at(plist.filename().string()); };
+    platform.pathExists = [](const fs::path& p) { return p != "/missing"; };
+    platform.signingStatus = [](const fs::path& p) {
+        return p == "/opt/bad" ? malware::SigningStatus::Unsigned : malware::SigningStatus::DeveloperSigned;
+    };
+    const auto report = malware::scanMalware({}, {agents}, {}, platform);
+
+    const auto severityOf = [&](const std::string& name) {
+        const auto* finding = findingFor(report, name);
+        CHECK(finding == nullptr || finding->kind == malware::FindingKind::Persistence);
+        return finding ? std::optional(finding->severity) : std::nullopt;
+    };
+    CHECK(severityOf("unsigned.plist") == malware::Severity::Suspicious);
+    CHECK(severityOf("tmp.plist") == malware::Severity::Suspicious);
+    CHECK(severityOf("hidden.plist") == malware::Severity::Suspicious);
+    CHECK(severityOf("missing.plist") == malware::Severity::Info);
+    CHECK(severityOf("empty.plist") == malware::Severity::Info);
+    CHECK(severityOf("relative.plist") == malware::Severity::Info);
+    CHECK(severityOf("unreadable.plist") == malware::Severity::Info);
+    CHECK(!severityOf("good.plist").has_value());
+    CHECK(!severityOf("readme.txt").has_value());
+    CHECK_EQ(report.findings.size(), std::size_t{7});
+}
+
+void testScanMalwareSkipsUnreadable() {
+    ScratchTree tree;
+    const fs::path locked = tree.root() / "locked.bin";
+    std::ofstream(locked) << eicarText();
+    std::ofstream(tree.root() / "eicar.txt") << eicarText();
+    fs::permissions(locked, fs::perms::none);
+    const auto report = malware::scanMalware({tree.root()}, {}, {malware::eicarSignature()}, fakePlatform());
+    CHECK(findingFor(report, "eicar.txt") != nullptr);
+    CHECK(findingFor(report, "locked.bin") == nullptr);
+    fs::permissions(locked, fs::perms::owner_all);
+}
+
+void testScanMalwareCancelled() {
+    ScratchTree tree;
+    for (int i = 0; i < 20; ++i) std::ofstream(tree.root() / ("eicar" + std::to_string(i))) << eicarText();
+    const std::atomic<bool> cancelled{true};
+    const auto report = malware::scanMalware({tree.root()}, {}, {malware::eicarSignature()}, fakePlatform(), &cancelled);
+    CHECK(report.findings.size() <= 1);
+}
+
+void testScanMalwareSkipsLargeFiles() {
+    ScratchTree tree;
+    {
+        std::ofstream big(tree.root() / "big.bin", std::ios::binary);
+        big << eicarText();
+    }
+    fs::resize_file(tree.root() / "big.bin", malware::kMaxScanBytes + 1);
+    const auto report = malware::scanMalware({tree.root()}, {}, {malware::eicarSignature()}, fakePlatform());
+    CHECK(report.findings.empty());
+    CHECK_EQ(report.skippedLarge, std::uint64_t{1});
+}
+
 int main() {
     testHumanReadableBytes();
 
@@ -2213,6 +2350,13 @@ int main() {
     testMalwareEmptyPatternNeverMatches();
     testMalwareParseHex();
     testMalwareEicar();
+    testScanMalwareFindsEicar();
+    testScanMalwareSkipsAppleSigned();
+    testScanMalwareQuarantinedAdhoc();
+    testScanMalwarePersistence();
+    testScanMalwareSkipsUnreadable();
+    testScanMalwareCancelled();
+    testScanMalwareSkipsLargeFiles();
 
     if (g_failures == 0) {
         std::cout << "All tests passed.\n";

@@ -96,8 +96,18 @@ build/mac_cleaner optimize --apply               # and terminate them (SIGTERM)
 open build/MacCleaner.app
 ```
 
+A short splash screen (icon, name, version) shows for about 0.6 s while the
+main window builds behind it; click it to dismiss it at once. It never
+delays launch.
+
 The sidebar on the left switches tools; each tool is a self-contained view
 controller over the shared core (see Extending).
+
+**Home** is where the app opens: one card per tool, with a cheap live
+summary that refreshes each time Home appears — reclaimable cache size
+(the Storage Cleaner scan, well under a second), free space on the home
+volume, and memory in use (app + wired + compressed, as Activity Monitor
+counts it). Click a card to open its tool.
 
 **Storage Cleaner** lists each non-empty category, expandable to the
 individual items underneath it, largest first. Check whole categories or
@@ -417,6 +427,7 @@ include/maccleaner/   public headers (types, safety, scanner, cleaner, trash, cl
 src/                  core implementation + CLI front end (main.cpp)
 src/platform/         OS-specific Trash backend (trash_mac.mm / trash_fallback.cpp)
 src/gui/              AppKit front end: MCMainWindowController = sidebar shell,
+                      MCHomeViewController = Home hub, MCSplashWindow = splash,
                       MCCleanerViewController / MCLargeFilesViewController /
                       MCPerformanceViewController / MCPhotosViewController /
                       MCOrganizerViewController = tools,

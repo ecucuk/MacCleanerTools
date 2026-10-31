@@ -21,6 +21,8 @@
 #include <atomic>
 #include <chrono>
 #include <fstream>
+#include <functional>
+#include <set>
 #include <iostream>
 #include <map>
 #include <numeric>
@@ -2136,6 +2138,242 @@ void testAppcastSkipsChannels() {
     CHECK(!updater::parseAppcast("<rss><channel></channel></rss>").has_value());
 }
 
+// --- updater: runner, check, upgrade ----------------------------------------
+
+// Records every argv and answers from a callback, so no test calls real
+// brew, port, mdls or curl.
+struct FakeRunner {
+    std::vector<std::vector<std::string>> calls;
+    std::function<updater::CommandResult(const std::vector<std::string>&)> answer =
+        [](const std::vector<std::string>&) { return updater::CommandResult{0, ""}; };
+
+    updater::RunFn fn() {
+        return [this](const std::vector<std::string>& argv, int) {
+            calls.push_back(argv);
+            return answer(argv);
+        };
+    }
+    bool ran(std::string_view exe) const {
+        return std::any_of(calls.begin(), calls.end(), [&](const auto& c) { return !c.empty() && c[0] == exe; });
+    }
+};
+
+bool hasArg(const std::vector<std::string>& argv, std::string_view arg) {
+    return std::find(argv.begin(), argv.end(), arg) != argv.end();
+}
+
+// An environment over fake .app folders in `tree`, with Info.plist data and
+// App Store receipts taken from the maps instead of the bundles.
+updater::Environment fakeEnvironment(const ScratchTree& tree,
+                                     std::map<std::string, updater::BundleInfo> bundles,
+                                     std::set<std::string> receipts = {}) {
+    for (const auto& [name, info] : bundles) {
+        fs::create_directories(tree.root() / name / "Contents");
+    }
+    updater::Environment env;
+    env.appFolders = {tree.root().string()};
+    env.readBundle = [bundles](const std::string& path) -> std::optional<updater::BundleInfo> {
+        const auto it = bundles.find(fs::path(path).filename().string());
+        return it == bundles.end() ? std::nullopt : std::optional(it->second);
+    };
+    env.exists = [receipts](const std::string& path) {
+        return receipts.count(fs::path(path).parent_path().parent_path().parent_path().filename().string()) > 0;
+    };
+    return env;
+}
+
+const updater::SourceStatus* statusOf(const updater::CheckResult& r, updater::Source s) {
+    for (const auto& st : r.sources) {
+        if (st.source == s) return &st;
+    }
+    return nullptr;
+}
+
+void testRunCommandCapturesOutput() {
+    const auto r = updater::runCommand({"/bin/echo", "hi"}, 5);
+    CHECK_EQ(r.exitCode, 0);
+    CHECK_EQ(r.output, std::string("hi\n"));
+    CHECK(updater::runCommand({"/nonexistent/tool"}, 5).exitCode != 0);
+    const auto err = updater::runCommand({"/bin/ls", "/nonexistent/dir"}, 5);
+    CHECK(err.exitCode != 0 && err.output.find("nonexistent") != std::string::npos); // stderr merged
+}
+
+void testRunCommandTimesOut() {
+    const auto start = std::chrono::steady_clock::now();
+    const auto r = updater::runCommand({"/bin/sleep", "5"}, 1);
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    CHECK_EQ(r.exitCode, -1);
+    CHECK(elapsed < std::chrono::seconds(3));
+}
+
+void testCheckMissingToolsAreNotErrors() {
+    ScratchTree tree;
+    FakeRunner runner;
+    const auto env = fakeEnvironment(tree, {});
+    const auto r = updater::checkUpdates(runner.fn(), env, [] { return false; });
+    CHECK(runner.calls.empty());
+    CHECK(r.items.empty());
+    const auto* brew = statusOf(r, updater::Source::Homebrew);
+    const auto* port = statusOf(r, updater::Source::MacPorts);
+    CHECK(brew && !brew->available && brew->error.empty());
+    CHECK(port && !port->available && port->error.empty());
+    CHECK_EQ(r.sources.size(), std::size_t(4));
+}
+
+void testCheckRunsBrewUpdateThenOutdated() {
+    ScratchTree tree;
+    FakeRunner runner;
+    runner.answer = [](const std::vector<std::string>& argv) {
+        if (hasArg(argv, "outdated")) return updater::CommandResult{0, kBrewOutdatedJson};
+        return updater::CommandResult{0, "{}"};
+    };
+    auto env = fakeEnvironment(tree, {});
+    env.brewPath = "/opt/homebrew/bin/brew";
+    const auto r = updater::checkUpdates(runner.fn(), env, [] { return false; });
+    CHECK_EQ(runner.calls.size(), std::size_t(3));
+    if (runner.calls.size() == 3) {
+        CHECK(runner.calls[0] == (std::vector<std::string>{"/opt/homebrew/bin/brew", "update"}));
+        CHECK(runner.calls[1] == (std::vector<std::string>{"/opt/homebrew/bin/brew", "outdated", "--json=v2"}));
+        CHECK(runner.calls[2] ==
+              (std::vector<std::string>{"/opt/homebrew/bin/brew", "info", "--cask", "--json=v2", "--installed"}));
+    }
+    CHECK_EQ(r.items.size(), std::size_t(3));
+    const auto* brew = statusOf(r, updater::Source::Homebrew);
+    CHECK(brew && brew->available && brew->error.empty());
+}
+
+void testCheckReportsBrewFailureKeepsOthers() {
+    ScratchTree tree;
+    FakeRunner runner;
+    runner.answer = [](const std::vector<std::string>& argv) {
+        if (hasArg(argv, "outdated")) return updater::CommandResult{1, "Error: lock held\n"};
+        if (argv[0] == "/usr/bin/curl")
+            return updater::CommandResult{0, R"(<item><enclosure sparkle:version="150" sparkle:shortVersionString="1.5"/></item>)"};
+        return updater::CommandResult{0, ""};
+    };
+    auto env = fakeEnvironment(tree, {{"Bar.app", {"1.0", "100", "https://bar.example/appcast.xml"}}});
+    env.brewPath = "/opt/homebrew/bin/brew";
+    const auto r = updater::checkUpdates(runner.fn(), env, [] { return false; });
+    const auto* brew = statusOf(r, updater::Source::Homebrew);
+    CHECK(brew && brew->available && brew->error.find("lock held") != std::string::npos);
+    CHECK_EQ(r.items.size(), std::size_t(1));
+    CHECK(!r.items.empty() && r.items[0].source == updater::Source::Sparkle);
+}
+
+void testCheckSparkleSkipsCaskAppsAndHttp() {
+    ScratchTree tree;
+    FakeRunner runner;
+    runner.answer = [](const std::vector<std::string>& argv) {
+        if (hasArg(argv, "info"))
+            return updater::CommandResult{0, R"({"casks":[{"artifacts":[{"app":["LinearMouse.app"]}]}]})"};
+        if (hasArg(argv, "outdated")) return updater::CommandResult{0, R"({"formulae":[],"casks":[]})"};
+        if (argv[0] == "/usr/bin/curl")
+            return updater::CommandResult{0, R"(<item><enclosure sparkle:version="150" sparkle:shortVersionString="1.5"/></item>)"};
+        return updater::CommandResult{0, ""};
+    };
+    auto env = fakeEnvironment(tree, {
+        {"LinearMouse.app", {"0.12.0", "50", "https://linearmouse.app/appcast.xml"}},
+        {"Foo.app", {"1.0", "100", "http://foo.example/appcast.xml"}},
+        {"Bar.app", {"1.0", "100", "https://bar.example/appcast.xml"}},
+        {"Same.app", {"1.5", "150", "https://same.example/appcast.xml"}},
+    });
+    env.brewPath = "/opt/homebrew/bin/brew";
+    const auto r = updater::checkUpdates(runner.fn(), env, [] { return false; });
+    CHECK_EQ(r.items.size(), std::size_t(1));
+    if (r.items.size() == 1) {
+        CHECK_EQ(r.items[0].name, std::string("Bar"));
+        CHECK_EQ(r.items[0].installedVersion, std::string("1.0"));
+        CHECK_EQ(r.items[0].latestVersion, std::string("1.5"));
+        CHECK_EQ(r.items[0].appPath, (tree.root() / "Bar.app").string());
+    }
+    std::vector<std::string> urls;
+    for (const auto& c : runner.calls) {
+        if (c[0] == "/usr/bin/curl") urls.push_back(c.back());
+    }
+    CHECK(urls == (std::vector<std::string>{"https://bar.example/appcast.xml", "https://same.example/appcast.xml"}));
+    for (const auto& c : runner.calls) {
+        if (c[0] == "/usr/bin/curl") CHECK(hasArg(c, "=https") && hasArg(c, "--max-filesize"));
+    }
+}
+
+void testCheckSkipsSparkleWithoutBundleVersion() {
+    ScratchTree tree;
+    FakeRunner runner;
+    const auto env = fakeEnvironment(tree, {{"Odd.app", {"1.0", "", "https://odd.example/appcast.xml"}}});
+    const auto r = updater::checkUpdates(runner.fn(), env, [] { return false; });
+    CHECK(r.items.empty());
+    CHECK(!runner.ran("/usr/bin/curl"));
+}
+
+void testCheckAppStoreBatchesLookup() {
+    ScratchTree tree;
+    FakeRunner runner;
+    runner.answer = [](const std::vector<std::string>& argv) {
+        if (argv[0] == "/usr/bin/mdls") return updater::CommandResult{0, std::string("111") + '\0' + "222" + '\0' + "(null)"};
+        if (argv[0] == "/usr/bin/curl")
+            return updater::CommandResult{0, R"({"results":[{"trackId":111,"version":"2.0"},{"trackId":222,"version":"1.0"}]})"};
+        return updater::CommandResult{0, ""};
+    };
+    auto env = fakeEnvironment(tree,
+                               {{"A.app", {"1.0", "1", ""}}, {"B.app", {"1.0", "1", ""}}, {"C.app", {"1.0", "1", ""}}},
+                               {"A.app", "B.app", "C.app"});
+    env.country = "tr";
+    const auto r = updater::checkUpdates(runner.fn(), env, [] { return false; });
+    int curls = 0;
+    for (const auto& c : runner.calls) {
+        if (c[0] == "/usr/bin/curl") {
+            ++curls;
+            CHECK(c.back().find("id=111,222&country=tr") != std::string::npos);
+        }
+        if (c[0] == "/usr/bin/mdls") CHECK_EQ(c.size(), std::size_t(7)); // 4 fixed args + 3 apps
+    }
+    CHECK_EQ(curls, 1);
+    CHECK_EQ(r.items.size(), std::size_t(1));
+    if (r.items.size() == 1) {
+        CHECK(r.items[0].source == updater::Source::AppStore);
+        CHECK_EQ(r.items[0].storeId, std::string("111"));
+        CHECK_EQ(r.items[0].name, std::string("A"));
+        CHECK_EQ(r.items[0].latestVersion, std::string("2.0"));
+    }
+}
+
+void testCheckCancelSkipsRemainingSources() {
+    ScratchTree tree;
+    FakeRunner runner;
+    auto env = fakeEnvironment(tree, {{"Bar.app", {"1.0", "100", "https://bar.example/appcast.xml"}}});
+    env.brewPath = "/opt/homebrew/bin/brew";
+    env.portPath = "/opt/local/bin/port";
+    updater::checkUpdates(runner.fn(), env, [&] { return !runner.calls.empty(); });
+    CHECK_EQ(runner.calls.size(), std::size_t(1));
+}
+
+void testUpgradeCommand() {
+    updater::Environment env;
+    env.brewPath = "/opt/homebrew/bin/brew";
+    updater::OutdatedItem formula;
+    formula.name = "wget";
+    CHECK(updater::upgradeCommand(env, formula) ==
+          (std::vector<std::string>{"/usr/bin/env", "HOMEBREW_NO_AUTO_UPDATE=1", "NONINTERACTIVE=1",
+                                    "/opt/homebrew/bin/brew", "upgrade", "wget"}));
+    updater::OutdatedItem cask = formula;
+    cask.name = "firefox";
+    cask.isCask = true;
+    CHECK(updater::upgradeCommand(env, cask) ==
+          (std::vector<std::string>{"/usr/bin/env", "HOMEBREW_NO_AUTO_UPDATE=1", "NONINTERACTIVE=1",
+                                    "/opt/homebrew/bin/brew", "upgrade", "--cask", "firefox"}));
+    CHECK_EQ(updater::manualCommand(cask), std::string("brew upgrade --cask firefox"));
+    updater::OutdatedItem port;
+    port.source = updater::Source::MacPorts;
+    port.name = "curl";
+    CHECK_EQ(updater::manualCommand(port), std::string("sudo port upgrade curl"));
+
+    FakeRunner runner;
+    runner.answer = [](const std::vector<std::string>&) { return updater::CommandResult{1, "boom\n"}; };
+    const auto r = updater::upgradeBrew(runner.fn(), env, cask);
+    CHECK_EQ(r.exitCode, 1);
+    CHECK(runner.calls.size() == 1 && runner.calls[0] == updater::upgradeCommand(env, cask));
+}
+
 int main() {
     testHumanReadableBytes();
 
@@ -2261,6 +2499,16 @@ int main() {
     testPortOutdated();
     testItunesLookup();
     testAppcastSkipsChannels();
+    testRunCommandCapturesOutput();
+    testRunCommandTimesOut();
+    testCheckMissingToolsAreNotErrors();
+    testCheckRunsBrewUpdateThenOutdated();
+    testCheckReportsBrewFailureKeepsOthers();
+    testCheckSparkleSkipsCaskAppsAndHttp();
+    testCheckSkipsSparkleWithoutBundleVersion();
+    testCheckAppStoreBatchesLookup();
+    testCheckCancelSkipsRemainingSources();
+    testUpgradeCommand();
 
     if (g_failures == 0) {
         std::cout << "All tests passed.\n";

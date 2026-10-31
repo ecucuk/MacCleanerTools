@@ -9,8 +9,6 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface MCCleanerViewController : NSViewController
 - (instancetype)init;
-/// Kicks off the first scan. Call once the view is in a window on screen.
-- (void)startInitialScan;
 @end
 
 NS_ASSUME_NONNULL_END

@@ -654,6 +654,7 @@ using maccleaner::killProcess;
 using maccleaner::ProcessInfo;
 using maccleaner::ProcessKind;
 using maccleaner::ProcessSample;
+using maccleaner::sampleMemoryUsage;
 using maccleaner::sampleProcesses;
 
 void testClassifyProcess() {
@@ -712,6 +713,13 @@ void testSampleProcessesSeesOurselves() {
         CHECK(self->memoryBytes > 0);
         CHECK(self->startTime > 0);
     }
+}
+
+void testSampleMemoryUsageIsPlausible() {
+    const maccleaner::MemoryUsage usage = sampleMemoryUsage();
+    CHECK(usage.totalBytes > 0);
+    CHECK(usage.usedBytes > 0); // this process alone is wired/app memory
+    CHECK(usage.usedBytes <= usage.totalBytes);
 }
 #endif
 
@@ -2575,6 +2583,7 @@ int main() {
     testDiffProcessSamplesHandlesNewAndReusedPids();
 #ifdef __APPLE__
     testSampleProcessesSeesOurselves();
+    testSampleMemoryUsageIsPlausible();
 #endif
     testIsSafeToKillRejectsProtectedTargets();
     testIsSafeToKillReportsForeignProcessesAccurately();

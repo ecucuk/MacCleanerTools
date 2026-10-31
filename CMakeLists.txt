@@ -165,6 +165,8 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
         src/gui/MCOrganizerModel.mm
         src/gui/MCMalwareModel.mm
         src/gui/MCMainWindowController.mm
+        src/gui/MCHomeViewController.mm
+        src/gui/MCSplashWindow.mm
         src/gui/MCCleanerViewController.mm
         src/gui/MCLargeFilesViewController.mm
         src/gui/MCPerformanceViewController.mm

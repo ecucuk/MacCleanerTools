@@ -1,6 +1,7 @@
 #import "MCMainWindowController.h"
 
 #import "MCCleanerViewController.h"
+#import "MCHomeViewController.h"
 #import "MCLargeFilesViewController.h"
 #import "MCPerformanceViewController.h"
 #import "MCAntivirusViewController.h"
@@ -122,7 +123,6 @@
 @property(nonatomic, strong) NSViewController *contentHost; // swaps tool views
 @property(nonatomic, copy) NSArray<MCToolEntry *> *tools;
 @property(nonatomic, strong, nullable) NSViewController *currentTool;
-@property(nonatomic) BOOL initialScanStarted;
 @end
 
 @implementation MCMainWindowController
@@ -181,7 +181,25 @@
         antivirus.symbolName = @"shield.lefthalf.filled";
         antivirus.make = ^{ return (NSViewController *)[[MCAntivirusViewController alloc] init]; };
 
-        _tools = @[ cleaner, largeFiles, photoCleaner, organizer, performance, antivirus ];
+        MCToolEntry *home = [[MCToolEntry alloc] init];
+        home.title = @"Home";
+        home.tool = MCToolHome;
+        home.symbolName = @"house";
+        __weak MCMainWindowController *weakSelf = self;
+        home.make = ^{
+            MCHomeViewController *hub = [[MCHomeViewController alloc] init];
+            for (MCToolEntry *entry in weakSelf.tools) {
+                if (entry.tool != MCToolHome) {
+                    [hub addCardForTool:entry.tool title:entry.title symbol:entry.symbolName];
+                }
+            }
+            hub.openTool = ^(MCTool tool) {
+                [weakSelf showTool:tool];
+            };
+            return (NSViewController *)hub;
+        };
+
+        _tools = @[ home, cleaner, largeFiles, photoCleaner, organizer, performance, antivirus ];
 
         _sidebar = [[MCToolSidebarController alloc] init];
         _sidebar.tools = _tools;
@@ -206,13 +224,14 @@
     return self;
 }
 
-- (void)startInitialScan {
-    // Reaches the cleaner only if it is still the selected tool by the time
-    // the app delegate calls this; switching first and scanning later would
-    // surprise whoever is already using another tool.
-    if ([self.currentTool isKindOfClass:[MCCleanerViewController class]] && !self.initialScanStarted) {
-        self.initialScanStarted = YES;
-        [(MCCleanerViewController *)self.currentTool startInitialScan];
+- (void)showTool:(MCTool)tool {
+    for (NSUInteger i = 0; i < self.tools.count; ++i) {
+        if (self.tools[i].tool == tool) {
+            // Through the sidebar, so its selection follows; it calls back into
+            // selectToolAtIndex:.
+            [self.sidebar.tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:i] byExtendingSelection:NO];
+            return;
+        }
     }
 }
 

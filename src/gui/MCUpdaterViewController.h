@@ -7,6 +7,10 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+/// NSUserDefaults key: the number of updates the last complete check left
+/// pending. Home shows it instead of running a slow check on launch.
+extern NSString *const MCUpdaterCachedCountKey;
+
 @interface MCUpdaterViewController : NSViewController
 - (instancetype)init;
 @end

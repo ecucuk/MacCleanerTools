@@ -5,6 +5,8 @@
 #import "MCToolBanner.h"
 #import "MCUpdaterModel.h"
 
+NSString *const MCUpdaterCachedCountKey = @"MCUpdaterCachedCount";
+
 namespace {
 
 NSString *const kSymbol = @"arrow.triangle.2.circlepath";
@@ -154,13 +156,18 @@ NSString *stateText(MCUpdateItem *item) {
     return selected;
 }
 
-/// The start screen until the first check; afterwards the results stay.
-- (void)updateState {
-    const BOOL busy = self.model.busy;
+- (NSUInteger)pendingCount {
     NSUInteger pending = 0;
     for (MCUpdateItem *item in self.model.items) {
         pending += item.state != MCUpdateRowStateDone ? 1 : 0;
     }
+    return pending;
+}
+
+/// The start screen until the first check; afterwards the results stay.
+- (void)updateState {
+    const BOOL busy = self.model.busy;
+    const NSUInteger pending = self.pendingCount;
     self.banner.value = [NSString stringWithFormat:@"%lu", (unsigned long)pending];
     self.banner.caption = pending == 1 ? @"update available" : @"updates available";
     // While a check runs, Check Again turns into its Stop.
@@ -217,6 +224,9 @@ NSString *stateText(MCUpdateItem *item) {
             failedSources += source.error.length > 0 ? 1 : 0;
             stopped = stopped || source.skipped;
         }
+        if (!stopped) {
+            [NSUserDefaults.standardUserDefaults setInteger:(NSInteger)self.pendingCount forKey:MCUpdaterCachedCountKey];
+        }
         self.statusLabel.stringValue =
             stopped             ? @"Stopped. Sources marked skipped were not fully checked."
             : failedSources > 0 ? [NSString stringWithFormat:@"Checked. %lu source(s) reported an error.",
@@ -251,6 +261,7 @@ NSString *stateText(MCUpdateItem *item) {
         }
         completion:^(NSUInteger upgraded, NSUInteger failed, BOOL cancelled) {
             self.upgrading = NO;
+            [NSUserDefaults.standardUserDefaults setInteger:(NSInteger)self.pendingCount forKey:MCUpdaterCachedCountKey];
             NSString *outcome = [NSString stringWithFormat:@"%lu updated, %lu failed", (unsigned long)upgraded,
                                                            (unsigned long)failed];
             self.statusLabel.stringValue = cancelled ? [outcome stringByAppendingString:@". Stopped."] : outcome;

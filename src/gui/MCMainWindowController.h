@@ -11,8 +11,6 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface MCMainWindowController : NSWindowController
 - (instancetype)init;
-/// Kicks off the default tool's first scan. Call once the window is on screen.
-- (void)startInitialScan;
 @end
 
 NS_ASSUME_NONNULL_END

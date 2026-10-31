@@ -5,19 +5,25 @@
 #import <AppKit/AppKit.h>
 
 #import "MCMainWindowController.h"
+#import "MCSplashWindow.h"
 
 @interface MCAppDelegate : NSObject <NSApplicationDelegate>
 @property(nonatomic, strong) MCMainWindowController *windowController;
+@property(nonatomic, strong) MCSplashWindow *splash;
 @end
 
 @implementation MCAppDelegate
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
+    // Floats above the main window, which is built and shown behind it, so
+    // the splash adds no time to launch.
+    self.splash = [[MCSplashWindow alloc] init];
+    [self.splash showForSeconds:0.6];
+
     self.windowController = [[MCMainWindowController alloc] init];
     [self.windowController showWindow:nil];
     [self.windowController.window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
-    [self.windowController startInitialScan];
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {

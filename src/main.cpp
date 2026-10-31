@@ -2,6 +2,7 @@
 #include "maccleaner/cleaner.hpp"
 #include "maccleaner/cli.hpp"
 #include "maccleaner/format.hpp"
+#include "maccleaner/malware.hpp"
 #include "maccleaner/optimizer.hpp"
 #include "maccleaner/organizer.hpp"
 #include "maccleaner/photos.hpp"
@@ -399,6 +400,70 @@ int runClean(const CliOptions& options) {
     return failures == 0 ? 0 : 1;
 }
 
+const char* severityLabel(malware::Severity severity) {
+    switch (severity) {
+        case malware::Severity::Detected: return "DETECTED  ";
+        case malware::Severity::Suspicious: return "SUSPICIOUS";
+        case malware::Severity::Info: return "INFO      ";
+    }
+    return "";
+}
+
+int runMalware(const CliOptions& options) {
+    std::vector<std::filesystem::path> roots(options.paths.begin(), options.paths.end());
+    if (roots.empty()) {
+        roots = malware::defaultScanRoots();
+    }
+    const auto launchDirs = malware::persistenceDirs();
+    const auto rules = malware::loadXProtectRules();
+    const auto platform = malware::defaultMalwarePlatform();
+    std::cerr << "Scanning with " << rules.size() << " signatures...\n";
+    const auto report = malware::scanMalware(roots, launchDirs, rules, platform, nullptr,
+                                             [](std::uint64_t scanned, const std::filesystem::path&) {
+                                                 if (isatty(STDERR_FILENO)) {
+                                                     std::fprintf(stderr, "\r  %llu files", static_cast<unsigned long long>(scanned));
+                                                 }
+                                             });
+    if (isatty(STDERR_FILENO)) {
+        std::cerr << "\r";
+    }
+
+    std::vector<const malware::Finding*> actionable;
+    for (const auto severity : {malware::Severity::Detected, malware::Severity::Suspicious, malware::Severity::Info}) {
+        for (const auto& finding : report.findings) {
+            if (finding.severity != severity) continue;
+            std::cout << "[" << severityLabel(severity) << "] " << finding.path.string() << " -- " << finding.reason << "\n";
+            if (severity != malware::Severity::Info) actionable.push_back(&finding);
+        }
+    }
+    std::cout << "\n" << report.filesScanned << " files scanned, " << report.skippedLarge
+              << " over " << humanReadableBytes(malware::kMaxScanBytes) << " not checked against signatures. "
+              << (report.findings.empty() ? "No findings.\n" : std::to_string(report.findings.size()) + " finding(s).\n");
+
+    if (!options.apply || actionable.empty()) {
+        return actionable.empty() ? 0 : 1;
+    }
+    if (!options.yes && !confirm("\nMove the " + std::to_string(actionable.size()) +
+                                 " Detected/Suspicious item(s) to the Trash?")) {
+        std::cout << "Aborted.\n";
+        return 1;
+    }
+    safety::AllowedRoots allowed;
+    for (const auto& root : roots) allowed.add(root);
+    for (const auto& dir : launchDirs) allowed.add(dir);
+    int failures = 0;
+    for (const auto* finding : actionable) {
+        std::string error;
+        if (malware::trashFinding(*finding, allowed, platform, error)) {
+            std::cout << "TRASHED " << finding->path.string() << "\n";
+        } else {
+            std::cout << "SKIP    " << finding->path.string() << "  (" << error << ")\n";
+            ++failures;
+        }
+    }
+    return failures == 0 ? 0 : 1;
+}
+
 int runUpdates(const CliOptions& options) {
     using namespace maccleaner::updater;
     Environment env = defaultEnvironment();
@@ -513,6 +578,8 @@ int main(int argc, char** argv) {
             return runOptimize(options);
         case Command::Organize:
             return runOrganize(options);
+        case Command::Malware:
+            return runMalware(options);
         case Command::Updates:
             return runUpdates(options);
     }

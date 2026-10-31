@@ -18,6 +18,7 @@ enum class Command {
     Photos,     // report duplicate and blurry photos under a root
     Optimize,   // find (and with --apply, terminate) reclaimable processes
     Organize,   // sort a folder into Photos/Videos/Music/Documents/Other (--apply moves)
+    Malware,    // scan for malware signatures and suspicious persistence (--trash remediates)
     Updates,    // list outdated software; --upgrade <name>... upgrades brew items
     Help,
 };
@@ -46,6 +47,8 @@ struct CliOptions {
     std::string dest; // empty = the source folder itself
     organizer::PhotoLayout photoLayout = organizer::PhotoLayout::Content;
 
+    // malware options. Empty = malware::defaultScanRoots(); --trash sets `apply`.
+    std::vector<std::string> paths;
     // updates options: brew items to upgrade (empty = list only).
     std::vector<std::string> upgradeNames;
 };

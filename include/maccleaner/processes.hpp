@@ -54,6 +54,17 @@ struct ProcessInfo {
 // see isSafeToKill). Non-Apple builds return an empty vector.
 std::vector<ProcessSample> sampleProcesses(uid_t uid);
 
+// System-wide RAM use, as Activity Monitor's Memory tab reports it:
+// used = app memory (internal minus purgeable pages) + wired + compressed.
+// Cached files are not "used" -- the kernel drops them on demand. Both
+// fields are 0 on non-Apple builds or when the kernel query fails.
+struct MemoryUsage {
+    std::uint64_t totalBytes = 0;
+    std::uint64_t usedBytes = 0;
+};
+
+MemoryUsage sampleMemoryUsage();
+
 // Pure join of two snapshots by pid: cpuPercent = delta CPU time over
 // `wallDeltaNs`. Processes present only in `current` get 0% (no baseline
 // yet); processes that exited since `previous` are dropped. A pid whose

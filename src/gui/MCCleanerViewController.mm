@@ -261,13 +261,6 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
 
 #pragma mark - Actions
 
-- (void)startInitialScan {
-    // The activity window ships open on first launch so the visualization is
-    // discoverable; it remembers nothing, so closing it is one click.
-    [self.activity showWindowRelativeTo:self.view.window];
-    [self rescan:nil];
-}
-
 - (void)showActivity:(id)sender {
     [self.activity showWindowRelativeTo:self.view.window];
 }

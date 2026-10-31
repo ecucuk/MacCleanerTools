@@ -11,6 +11,7 @@
 #include "maccleaner/processes.hpp"
 #include "maccleaner/cli.hpp"
 #include "maccleaner/format.hpp"
+#include "maccleaner/malware.hpp"
 #include "maccleaner/safety.hpp"
 #include "maccleaner/scanner.hpp"
 #include "maccleaner/walk.hpp"
@@ -28,6 +29,11 @@
 #include <vector>
 #include <signal.h>
 #include <sys/stat.h>
+#include <sys/xattr.h>
+#include <climits>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -59,6 +65,7 @@ int g_failures = 0;
 
 namespace fs = std::filesystem;
 namespace organizer = maccleaner::organizer;
+namespace malware = maccleaner::malware;
 using maccleaner::humanReadableBytes;
 using maccleaner::safety::AllowedRoots;
 using maccleaner::safety::isSafeToDelete;
@@ -2017,6 +2024,507 @@ void testCliParsesOrganize() {
     CHECK(!parseArgs(4, const_cast<char**>(badLayout), error).has_value());
 }
 
+// --- malware ----------------------------------------------------------------
+
+std::vector<std::uint8_t> bytesOf(std::string_view text) {
+    return {text.begin(), text.end()};
+}
+
+malware::Signature bytesRule(std::string_view text) {
+    malware::Signature sig;
+    sig.name = "test";
+    sig.match.op = malware::SignatureMatch::Op::Pattern;
+    sig.match.pattern = {{0, malware::kAnyGap, bytesOf(text)}};
+    return sig;
+}
+
+malware::Signature patternRule(std::string_view pattern) {
+    malware::Signature sig;
+    sig.name = "test";
+    sig.match.op = malware::SignatureMatch::Op::Pattern;
+    sig.match.pattern = malware::parsePattern(pattern).value_or(std::vector<malware::PatternPart>{});
+    return sig;
+}
+
+const malware::Sha1Digest kNoSha1{};
+
+void testMalwareMatchBytes() {
+    const auto rule = patternRule("3A62696E3A");
+    CHECK(malware::matchSignature(rule, bytesOf("xx:bin:yy"), kNoSha1));
+    CHECK(!malware::matchSignature(rule, bytesOf("xx:bix:yy"), kNoSha1));
+}
+
+void testMalwareMatchSha1() {
+    malware::Sha1Digest digest{};
+    digest[0] = 0xab;
+    malware::Signature sig;
+    sig.match.op = malware::SignatureMatch::Op::Sha1;
+    sig.match.sha1 = digest;
+    CHECK(malware::matchSignature(sig, bytesOf("anything"), digest));
+    CHECK(!malware::matchSignature(sig, bytesOf("anything"), kNoSha1));
+}
+
+void testMalwareMatchAnyAll() {
+    malware::Signature sig;
+    sig.match.children = {bytesRule("miss").match, bytesRule("hit").match};
+    sig.match.op = malware::SignatureMatch::Op::Any;
+    CHECK(malware::matchSignature(sig, bytesOf("a hit"), kNoSha1));
+    sig.match.op = malware::SignatureMatch::Op::All;
+    CHECK(!malware::matchSignature(sig, bytesOf("a hit"), kNoSha1));
+    CHECK(malware::matchSignature(sig, bytesOf("a hit, a miss"), kNoSha1));
+}
+
+// XProtect.plist puts MatchFile (size, name, type) on each leaf.
+void testMalwareLeafFileConstraints() {
+    auto sized = bytesRule("abc");
+    sized.match.size = 5;
+    CHECK(malware::matchSignature(sized, bytesOf("abcde"), kNoSha1));
+    CHECK(!malware::matchSignature(sized, bytesOf("abcdef"), kNoSha1));
+
+    auto named = bytesRule("abc");
+    named.match.fileName = "Installer";
+    CHECK(malware::matchSignature(named, bytesOf("abc"), kNoSha1, {"Installer", false}));
+    CHECK(!malware::matchSignature(named, bytesOf("abc"), kNoSha1, {"Other", false}));
+
+    auto exec = bytesRule("abc");
+    exec.match.executableOnly = true;
+    CHECK(malware::matchSignature(exec, bytesOf("abc"), kNoSha1, {"x", true}));
+    CHECK(!malware::matchSignature(exec, bytesOf("abc"), kNoSha1, {"x", false}));
+}
+
+// An empty pattern or group would otherwise match every file on disk.
+void testMalwareEmptyPatternNeverMatches() {
+    CHECK(!malware::matchSignature(bytesRule(""), bytesOf("abc"), kNoSha1));
+    malware::Signature group;
+    group.match.op = malware::SignatureMatch::Op::All;
+    CHECK(!malware::matchSignature(group, bytesOf("abc"), kNoSha1));
+    group.match.op = malware::SignatureMatch::Op::Any;
+    CHECK(!malware::matchSignature(group, bytesOf("abc"), kNoSha1));
+}
+
+void testMalwareParsePattern() {
+    const auto plain = malware::parsePattern("3a6C");
+    CHECK(plain && plain->size() == 1 && (*plain)[0].bytes == (std::vector<std::uint8_t>{0x3a, 0x6c}));
+    CHECK(!malware::parsePattern("abc").has_value());
+    CHECK(!malware::parsePattern("zz").has_value());
+    CHECK(!malware::parsePattern("4142(43|44)").has_value());
+    CHECK(!malware::parsePattern("41\n42").has_value());
+    CHECK(!malware::parsePattern("????").has_value()); // no literal byte at all
+    CHECK(!malware::parsePattern("").has_value());
+    const auto gaps = malware::parsePattern("41??42{2}43{-3}44*45{1-2}46");
+    CHECK(gaps && gaps->size() == 6);
+}
+
+void testMalwarePatternWildcards() {
+    CHECK(malware::matchSignature(patternRule("41??43"), bytesOf("xAzCx"), kNoSha1));
+    CHECK(!malware::matchSignature(patternRule("41??43"), bytesOf("xACx"), kNoSha1));
+    CHECK(malware::matchSignature(patternRule("41{2}44"), bytesOf("AbcD"), kNoSha1));
+    CHECK(!malware::matchSignature(patternRule("41{2}44"), bytesOf("AbD"), kNoSha1));
+    CHECK(malware::matchSignature(patternRule("41{-2}44"), bytesOf("AD"), kNoSha1));
+    CHECK(malware::matchSignature(patternRule("41{-2}44"), bytesOf("AbcD"), kNoSha1));
+    CHECK(!malware::matchSignature(patternRule("41{-2}44"), bytesOf("AbcdD"), kNoSha1));
+    CHECK(malware::matchSignature(patternRule("41*44"), bytesOf("A----------D"), kNoSha1));
+    CHECK(!malware::matchSignature(patternRule("41*44"), bytesOf("D----A"), kNoSha1));
+    // The first "B" fails the fixed gap; the matcher must retry the later one.
+    CHECK(malware::matchSignature(patternRule("41*42{1}43"), bytesOf("ABxxABxC"), kNoSha1));
+    CHECK(malware::matchSignature(patternRule("41{1}"), bytesOf("Ax"), kNoSha1));
+    CHECK(!malware::matchSignature(patternRule("41{1}"), bytesOf("xA"), kNoSha1));
+}
+
+// Built from two halves so this source file is not itself flagged by AV.
+std::string eicarText() {
+    return std::string("X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-") + "ANTIVIRUS-TEST-FILE!$H+H*";
+}
+
+void testMalwareEicar() {
+    const auto text = eicarText();
+    CHECK_EQ(text.size(), std::size_t{68});
+    const auto sig = malware::eicarSignature();
+    CHECK_EQ(sig.name, std::string("EICAR-Test-File"));
+    CHECK(malware::matchSignature(sig, bytesOf(text), kNoSha1));
+    CHECK(!malware::matchSignature(sig, bytesOf("harmless"), kNoSha1));
+}
+
+// A platform where nothing is signed, quarantined or missing; tests override
+// the one function they exercise.
+malware::MalwarePlatform fakePlatform() {
+    malware::MalwarePlatform platform;
+    platform.signingStatus = [](const fs::path&) { return malware::SigningStatus::Unknown; };
+    platform.hasQuarantine = [](const fs::path&) { return false; };
+    platform.sha1 = [](std::span<const std::uint8_t>) { return malware::Sha1Digest{}; };
+    platform.readLaunchTarget = [](const fs::path&) { return std::optional<std::string>{}; };
+    platform.pathExists = [](const fs::path&) { return true; };
+    return platform;
+}
+
+const std::string kMachOMagic = "\xcf\xfa\xed\xfe";
+
+const malware::Finding* findingFor(const malware::MalwareReport& report, const std::string& filename) {
+    for (const auto& finding : report.findings) {
+        if (finding.path.filename() == filename) return &finding;
+    }
+    return nullptr;
+}
+
+void testScanMalwareFindsEicar() {
+    ScratchTree tree;
+    std::ofstream(tree.root() / "eicar.txt") << eicarText();
+    const auto report = malware::scanMalware({tree.root()}, {}, {malware::eicarSignature()}, fakePlatform());
+    CHECK_EQ(report.findings.size(), std::size_t{1});
+    const auto* hit = findingFor(report, "eicar.txt");
+    CHECK(hit != nullptr && hit->severity == malware::Severity::Detected &&
+          hit->kind == malware::FindingKind::Signature && hit->reason == "EICAR-Test-File");
+    CHECK(report.filesScanned >= 2);
+}
+
+void testScanMalwareSkipsAppleSigned() {
+    ScratchTree tree;
+    std::ofstream(tree.root() / "apple_tool") << kMachOMagic << eicarText();
+    auto platform = fakePlatform();
+    platform.signingStatus = [](const fs::path&) { return malware::SigningStatus::Apple; };
+    platform.hasQuarantine = [](const fs::path&) { return true; };
+    const auto report = malware::scanMalware({tree.root()}, {}, {malware::eicarSignature()}, platform);
+    CHECK(report.findings.empty());
+}
+
+void testScanMalwareQuarantinedAdhoc() {
+    ScratchTree tree;
+    std::ofstream(tree.root() / "tool") << kMachOMagic << "code";
+    fs::permissions(tree.root() / "tool", fs::perms::owner_exec, fs::perm_options::add);
+    std::ofstream(tree.root() / "notes.txt") << "not mach-o";
+    // A Mach-O object file without an execute bit cannot run (Blender ships one).
+    std::ofstream(tree.root() / "python.o") << kMachOMagic << "object";
+    auto platform = fakePlatform();
+    platform.signingStatus = [](const fs::path&) { return malware::SigningStatus::AdHoc; };
+    platform.hasQuarantine = [](const fs::path&) { return true; };
+    auto report = malware::scanMalware({tree.root()}, {}, {}, platform);
+    CHECK_EQ(report.findings.size(), std::size_t{1});
+    const auto* hit = findingFor(report, "tool");
+    CHECK(hit != nullptr && hit->severity == malware::Severity::Suspicious &&
+          hit->kind == malware::FindingKind::Quarantine);
+
+    platform.hasQuarantine = [](const fs::path&) { return false; };
+    CHECK(malware::scanMalware({tree.root()}, {}, {}, platform).findings.empty());
+
+    platform.hasQuarantine = [](const fs::path&) { return true; };
+    platform.signingStatus = [](const fs::path&) { return malware::SigningStatus::DeveloperSigned; };
+    CHECK(malware::scanMalware({tree.root()}, {}, {}, platform).findings.empty());
+}
+
+void testScanMalwarePersistence() {
+    ScratchTree tree;
+    const fs::path agents = tree.root() / "agents";
+    fs::create_directories(agents);
+    const std::map<std::string, std::optional<std::string>> targets = {
+        {"unsigned.plist", "/opt/bad"},
+        {"tmp.plist", "/tmp/x"},
+        {"hidden.plist", "/Users/x/.hidden/bin"},
+        {"missing.plist", "/missing"},
+        {"empty.plist", ""},
+        {"relative.plist", "relative/x"},
+        {"good.plist", "/Applications/Good"},
+        {"unreadable.plist", std::nullopt},
+        {"adhoc.plist", "/opt/homebrew/bin/tool"},
+        {"adhocquarantined.plist", "/opt/downloaded"},
+    };
+    for (const auto& [name, target] : targets) std::ofstream(agents / name) << "plist";
+    std::ofstream(agents / "readme.txt") << "not a plist";
+
+    auto platform = fakePlatform();
+    platform.readLaunchTarget = [&](const fs::path& plist) { return targets.at(plist.filename().string()); };
+    platform.pathExists = [](const fs::path& p) { return p != "/missing"; };
+    platform.signingStatus = [](const fs::path& p) {
+        if (p == "/opt/bad") return malware::SigningStatus::Unsigned;
+        if (p.string().starts_with("/opt/")) return malware::SigningStatus::AdHoc;
+        return malware::SigningStatus::DeveloperSigned;
+    };
+    platform.hasQuarantine = [](const fs::path& p) { return p == "/opt/downloaded"; };
+    const auto report = malware::scanMalware({}, {agents}, {}, platform);
+
+    const auto severityOf = [&](const std::string& name) {
+        const auto* finding = findingFor(report, name);
+        CHECK(finding == nullptr || finding->kind == malware::FindingKind::Persistence);
+        return finding ? std::optional(finding->severity) : std::nullopt;
+    };
+    CHECK(severityOf("unsigned.plist") == malware::Severity::Suspicious);
+    CHECK(severityOf("tmp.plist") == malware::Severity::Suspicious);
+    CHECK(!severityOf("hidden.plist").has_value()); // Developer-signed: a dot-dir alone is not enough
+    CHECK(severityOf("missing.plist") == malware::Severity::Info);
+    CHECK(severityOf("empty.plist") == malware::Severity::Info);
+    CHECK(severityOf("relative.plist") == malware::Severity::Info);
+    CHECK(severityOf("unreadable.plist") == malware::Severity::Info);
+    // Homebrew and self-built tools are ad-hoc signed; only a downloaded one is suspicious.
+    CHECK(severityOf("adhoc.plist") == malware::Severity::Info);
+    CHECK(severityOf("adhocquarantined.plist") == malware::Severity::Suspicious);
+    CHECK(!severityOf("good.plist").has_value());
+    CHECK(!severityOf("readme.txt").has_value());
+    CHECK_EQ(report.findings.size(), std::size_t{8});
+}
+
+void testScanMalwareSkipsUnreadable() {
+    ScratchTree tree;
+    const fs::path locked = tree.root() / "locked.bin";
+    std::ofstream(locked) << eicarText();
+    std::ofstream(tree.root() / "eicar.txt") << eicarText();
+    fs::permissions(locked, fs::perms::none);
+    const auto report = malware::scanMalware({tree.root()}, {}, {malware::eicarSignature()}, fakePlatform());
+    CHECK(findingFor(report, "eicar.txt") != nullptr);
+    CHECK(findingFor(report, "locked.bin") == nullptr);
+    fs::permissions(locked, fs::perms::owner_all);
+}
+
+void testScanMalwareCancelled() {
+    ScratchTree tree;
+    for (int i = 0; i < 20; ++i) std::ofstream(tree.root() / ("eicar" + std::to_string(i))) << eicarText();
+    const std::atomic<bool> cancelled{true};
+    const auto report = malware::scanMalware({tree.root()}, {}, {malware::eicarSignature()}, fakePlatform(), &cancelled);
+    CHECK(report.findings.size() <= 1);
+}
+
+void testScanMalwareSkipsLargeFiles() {
+    ScratchTree tree;
+    {
+        std::ofstream big(tree.root() / "big.bin", std::ios::binary);
+        big << eicarText();
+    }
+    fs::resize_file(tree.root() / "big.bin", malware::kMaxScanBytes + 1);
+    const auto report = malware::scanMalware({tree.root()}, {}, {malware::eicarSignature()}, fakePlatform());
+    CHECK(report.findings.empty());
+    CHECK_EQ(report.skippedLarge, std::uint64_t{1});
+}
+
+#if defined(__APPLE__)
+void testSigningStatusReal() {
+    const auto platform = malware::defaultMalwarePlatform();
+    CHECK(platform.signingStatus("/bin/ls") == malware::SigningStatus::Apple);
+    // The linker ad-hoc signs this test binary on Apple silicon.
+    char self[PATH_MAX];
+    std::uint32_t size = sizeof self;
+    CHECK(_NSGetExecutablePath(self, &size) == 0);
+#if defined(__arm64__)
+    CHECK(platform.signingStatus(self) == malware::SigningStatus::AdHoc);
+#endif
+    ScratchTree tree;
+    CHECK(platform.signingStatus(tree.root() / "child_file.txt") == malware::SigningStatus::Unsigned);
+}
+
+void testQuarantineAndSha1Real() {
+    const auto platform = malware::defaultMalwarePlatform();
+    ScratchTree tree;
+    const fs::path file = tree.root() / "child_file.txt";
+    CHECK(!platform.hasQuarantine(file));
+    const char value[] = "0081;00000000;Test;";
+    CHECK(setxattr(file.c_str(), "com.apple.quarantine", value, sizeof value - 1, 0, 0) == 0);
+    CHECK(platform.hasQuarantine(file));
+
+    const auto digest = platform.sha1(bytesOf("abc"));
+    const auto expected = malware::parsePattern("a9993e364706816aba3e25717850c26c9cd0d89d");
+    CHECK(expected && std::equal(digest.begin(), digest.end(), (*expected)[0].bytes.begin()));
+}
+
+void testReadLaunchTargetReal() {
+    const auto platform = malware::defaultMalwarePlatform();
+    ScratchTree tree;
+    const auto plist = [&](const std::string& name, const std::string& body) {
+        std::ofstream(tree.root() / name)
+            << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<plist version=\"1.0\"><dict>" << body << "</dict></plist>\n";
+        return tree.root() / name;
+    };
+    CHECK(platform.readLaunchTarget(plist("p.plist", "<key>Program</key><string>/opt/a</string>")) ==
+          std::optional<std::string>("/opt/a"));
+    CHECK(platform.readLaunchTarget(plist("a.plist",
+              "<key>ProgramArguments</key><array><string>/opt/b</string><string>-x</string></array>")) ==
+          std::optional<std::string>("/opt/b"));
+    CHECK(platform.readLaunchTarget(plist("n.plist", "<key>Label</key><string>x</string>")) ==
+          std::optional<std::string>(""));
+    std::ofstream(tree.root() / "bad.plist") << "not a plist";
+    CHECK(!platform.readLaunchTarget(tree.root() / "bad.plist").has_value());
+}
+
+void testLoadXProtectRulesFromFixture() {
+    ScratchTree tree;
+    const fs::path plist = tree.root() / "XProtect.plist";
+    std::ofstream(plist) << R"(<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><array>
+ <dict><key>Description</key><string>OSX.One</string>
+  <key>Matches</key><array>
+   <dict><key>MatchFile</key><dict><key>NSURLFileSizeKey</key><integer>9</integer>
+     <key>NSURLTypeIdentifierKey</key><string>public.unix-executable</string></dict>
+    <key>MatchType</key><string>Match</string><key>Pattern</key><string>3A62696E3A</string></dict>
+  </array></dict>
+ <dict><key>Description</key><string>OSX.Two</string>
+  <key>Matches</key><array>
+   <dict><key>MatchType</key><string>MatchAny</string><key>Matches</key><array>
+    <dict><key>MatchFile</key><dict/><key>MatchType</key><string>Match</string><key>Pattern</key><string>6869</string></dict>
+    <dict><key>MatchFile</key><dict/><key>MatchType</key><string>Match</string>
+     <key>Identity</key><data>qZk+NkcGgWq6PiVxeFDCbJzQ2J0=</data></dict>
+   </array></dict>
+  </array></dict>
+ <dict><key>Description</key><string>OSX.Bogus</string>
+  <key>Matches</key><array>
+   <dict><key>MatchFile</key><dict/><key>MatchType</key><string>Bogus</string><key>Pattern</key><string>00</string></dict>
+  </array></dict>
+</array></plist>
+)";
+    const auto rules = malware::loadXProtectRules(plist);
+    CHECK_EQ(rules.size(), std::size_t{3});
+    const auto byName = [&](const std::string& name) {
+        const auto it = std::find_if(rules.begin(), rules.end(), [&](const auto& r) { return r.name == name; });
+        return it == rules.end() ? nullptr : &*it;
+    };
+    CHECK(byName("EICAR-Test-File") != nullptr);
+    CHECK(byName("OSX.Bogus") == nullptr);
+    const auto* one = byName("OSX.One");
+    CHECK(one != nullptr && one->match.op == malware::SignatureMatch::Op::All && one->match.children.size() == 1 &&
+          one->match.children[0].size == std::optional<std::uint64_t>(9));
+    const malware::FileInfo exe{"tool", true};
+    CHECK(one != nullptr && one->match.children[0].executableOnly);
+    CHECK(one != nullptr && malware::matchSignature(*one, bytesOf("xx:bin:yy"), kNoSha1, exe));
+    CHECK(one != nullptr && !malware::matchSignature(*one, bytesOf("xx:bin:yy"), kNoSha1));
+    CHECK(one != nullptr && !malware::matchSignature(*one, bytesOf("x:bin:"), kNoSha1, exe));
+    const auto* two = byName("OSX.Two");
+    const auto abcDigest = malware::defaultMalwarePlatform().sha1(bytesOf("abc"));
+    CHECK(two != nullptr && malware::matchSignature(*two, bytesOf("abc"), abcDigest));
+    CHECK(two != nullptr && malware::matchSignature(*two, bytesOf("say hi"), kNoSha1));
+    CHECK(two != nullptr && !malware::matchSignature(*two, bytesOf("nope"), kNoSha1));
+}
+
+void testLoadXProtectRulesMissingFile() {
+    const auto rules = malware::loadXProtectRules("/nonexistent/XProtect.plist");
+    CHECK_EQ(rules.size(), std::size_t{1});
+    CHECK(!rules.empty() && rules[0].name == "EICAR-Test-File");
+}
+#endif
+
+void testTrashFindingRefusesUnsafe() {
+    ScratchTree tree;
+    AllowedRoots allowed;
+    allowed.add(tree.root());
+    auto platform = fakePlatform();
+    std::string error;
+
+    platform.signingStatus = [](const fs::path&) { return malware::SigningStatus::Apple; };
+    const malware::Finding apple{tree.root() / "child_file.txt", malware::Severity::Suspicious,
+                                 malware::FindingKind::Quarantine, ""};
+    CHECK(!malware::trashFinding(apple, allowed, platform, error));
+    CHECK(!error.empty());
+    CHECK(fs::exists(apple.path));
+
+    platform = fakePlatform();
+    error.clear();
+    const malware::Finding outside{tree.outside() / "secret.txt", malware::Severity::Detected,
+                                   malware::FindingKind::Signature, ""};
+    CHECK(!malware::trashFinding(outside, allowed, platform, error));
+    CHECK(!error.empty());
+    CHECK(fs::exists(outside.path));
+
+    error.clear();
+    const malware::Finding system{"/System/Library/CoreServices/Finder.app", malware::Severity::Detected,
+                                  malware::FindingKind::Signature, ""};
+    CHECK(!malware::trashFinding(system, allowed, platform, error));
+    CHECK(!error.empty());
+}
+
+void testCliParsesMalware() {
+    CliParseError error;
+    const char* argv[] = {"mac_cleaner", "malware", "--path=/a", "--path=/b", "--trash", "--yes"};
+    const auto options = parseArgs(6, const_cast<char**>(argv), error);
+    CHECK(options.has_value());
+    CHECK(options->command == Command::Malware);
+    CHECK(options->paths == (std::vector<std::string>{"/a", "/b"}));
+    CHECK(options->apply);
+    CHECK(options->yes);
+
+    const char* plain[] = {"mac_cleaner", "malware"};
+    const auto defaults = parseArgs(2, const_cast<char**>(plain), error);
+    CHECK(defaults.has_value() && defaults->paths.empty() && !defaults->apply);
+
+    const char* empty[] = {"mac_cleaner", "malware", "--path="};
+    CHECK(!parseArgs(3, const_cast<char**>(empty), error).has_value());
+}
+
+// Review fix: the step cap used to count every start of the first literal, so
+// a common opcode (48 8B) seen 4096+ times hid a real match further on.
+void testMalwarePatternManyFirstLiteralHits() {
+    std::string content;
+    for (int i = 0; i < 5000; ++i) content += "\x48\x8b";
+    content += std::string("\x48\x8b") + "xxxxx" + "\x48\x8d\x5d\xb8";
+    CHECK(malware::matchSignature(patternRule("488B??????????488D5DB8"), bytesOf(content), kNoSha1));
+    CHECK(malware::matchSignature(patternRule("488B*488D5DB8"), bytesOf(content), kNoSha1));
+    CHECK(!malware::matchSignature(patternRule("488B*488D5DB9"), bytesOf(content), kNoSha1));
+}
+
+// Review fix: dot-directories are normal for developer tools (~/.cargo/bin);
+// only an unsigned or ad-hoc program there is suspicious.
+void testScanMalwareHiddenDirNeedsUnsignedTarget() {
+    ScratchTree tree;
+    const fs::path agents = tree.root() / "agents";
+    fs::create_directories(agents);
+    std::ofstream(agents / "cargo.plist") << "plist";
+    std::ofstream(agents / "dropper.plist") << "plist";
+    auto platform = fakePlatform();
+    platform.readLaunchTarget = [](const fs::path& plist) {
+        return std::optional<std::string>(plist.filename() == "cargo.plist" ? "/Users/x/.cargo/bin/tool"
+                                                                            : "/Users/x/.hidden/dropper");
+    };
+    platform.signingStatus = [](const fs::path& p) {
+        return p.filename() == "tool" ? malware::SigningStatus::DeveloperSigned : malware::SigningStatus::Unsigned;
+    };
+    const auto report = malware::scanMalware({}, {agents}, {}, platform);
+    CHECK(findingFor(report, "cargo.plist") == nullptr);
+    const auto* dropper = findingFor(report, "dropper.plist");
+    CHECK(dropper != nullptr && dropper->severity == malware::Severity::Suspicious);
+}
+
+// Review fix: one *.plist symlink that cannot be stat'ed used to end the
+// directory loop, hiding every plist after it.
+void testScanMalwarePersistenceSurvivesBadSymlink() {
+    ScratchTree tree;
+    const fs::path agents = tree.root() / "agents";
+    const fs::path locked = tree.root() / "locked";
+    fs::create_directories(agents);
+    fs::create_directories(locked);
+    std::ofstream(locked / "x.plist") << "plist";
+    for (int i = 0; i < 20; ++i) {
+        fs::create_symlink(locked / "x.plist", agents / ("bad" + std::to_string(i) + ".plist"));
+        std::ofstream(agents / ("good" + std::to_string(i) + ".plist")) << "plist";
+    }
+    fs::permissions(locked, fs::perms::none);
+    auto platform = fakePlatform(); // unreadable target -> one Info per audited plist
+    const auto report = malware::scanMalware({}, {agents}, {}, platform);
+    fs::permissions(locked, fs::perms::owner_all);
+    int good = 0;
+    for (const auto& finding : report.findings) good += finding.path.filename().string().starts_with("good");
+    CHECK_EQ(good, 20);
+}
+
+void testCliTrashOnlyForMalware() {
+    CliParseError error;
+    const char* clean[] = {"mac_cleaner", "clean", "--trash", "--yes"};
+    CHECK(!parseArgs(4, const_cast<char**>(clean), error).has_value());
+    const char* optimize[] = {"mac_cleaner", "optimize", "--trash"};
+    CHECK(!parseArgs(3, const_cast<char**>(optimize), error).has_value());
+}
+
+#if defined(__APPLE__)
+// Review fix: a launchd plist whose Program has a lone UTF-16 surrogate makes
+// -UTF8String return NULL; std::string(NULL) crashed the scan.
+void testReadLaunchTargetBadString() {
+    ScratchTree tree;
+    const auto bytes = malware::parsePattern(
+        "62706c6973743030d101025750726f6772616d61d800080b13000000000000010100000000000000030000000000000000000000"
+        "0000000016");
+    CHECK(bytes.has_value());
+    const fs::path plist = tree.root() / "bad.plist";
+    {
+        std::ofstream out(plist, std::ios::binary);
+        out.write(reinterpret_cast<const char*>((*bytes)[0].bytes.data()),
+                  static_cast<std::streamsize>((*bytes)[0].bytes.size()));
+    }
+    CHECK(!malware::defaultMalwarePlatform().readLaunchTarget(plist).has_value());
+}
+#endif
+
 int main() {
     testHumanReadableBytes();
 
@@ -2133,6 +2641,37 @@ int main() {
     testPlanHoldsUnresolvedPlaces();
     testResolvePlacesCancelStopsThrottlePause();
     testPlanKeepsSidecarsWithPhoto();
+    testMalwareMatchBytes();
+    testMalwareMatchSha1();
+    testMalwareMatchAnyAll();
+    testMalwareLeafFileConstraints();
+    testMalwareEmptyPatternNeverMatches();
+    testMalwareParsePattern();
+    testMalwarePatternWildcards();
+    testMalwareEicar();
+    testScanMalwareFindsEicar();
+    testScanMalwareSkipsAppleSigned();
+    testScanMalwareQuarantinedAdhoc();
+    testScanMalwarePersistence();
+    testScanMalwareSkipsUnreadable();
+    testScanMalwareCancelled();
+    testScanMalwareSkipsLargeFiles();
+    testTrashFindingRefusesUnsafe();
+    testMalwarePatternManyFirstLiteralHits();
+    testScanMalwareHiddenDirNeedsUnsignedTarget();
+    testScanMalwarePersistenceSurvivesBadSymlink();
+    testCliTrashOnlyForMalware();
+#if defined(__APPLE__)
+    testReadLaunchTargetBadString();
+#endif
+    testCliParsesMalware();
+#if defined(__APPLE__)
+    testSigningStatusReal();
+    testQuarantineAndSha1Real();
+    testReadLaunchTargetReal();
+    testLoadXProtectRulesFromFixture();
+    testLoadXProtectRulesMissingFile();
+#endif
 
     if (g_failures == 0) {
         std::cout << "All tests passed.\n";

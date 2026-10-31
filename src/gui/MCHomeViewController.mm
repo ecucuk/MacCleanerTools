@@ -210,6 +210,7 @@ constexpr NSInteger kColumns = 2;
         case MCToolPhotos: return @"Find duplicate and blurry photos";
         case MCToolOrganizer: return @"Sort a folder by type or place";
         case MCToolPerformance: return @"Processes, CPU and memory";
+        case MCToolAntivirus: return @"Scan for known malware";
         case MCToolHome: return @"";
     }
     return @"";

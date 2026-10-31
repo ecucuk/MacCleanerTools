@@ -4,6 +4,7 @@
 #import "MCHomeViewController.h"
 #import "MCLargeFilesViewController.h"
 #import "MCPerformanceViewController.h"
+#import "MCAntivirusViewController.h"
 #import "MCOrganizerViewController.h"
 #import "MCPhotosViewController.h"
 #import "MCTheme.h"
@@ -174,6 +175,12 @@
         organizer.symbolName = @"folder.badge.gearshape";
         organizer.make = ^{ return (NSViewController *)[[MCOrganizerViewController alloc] init]; };
 
+        MCToolEntry *antivirus = [[MCToolEntry alloc] init];
+        antivirus.title = @"Antivirus";
+        antivirus.tool = MCToolAntivirus;
+        antivirus.symbolName = @"shield.lefthalf.filled";
+        antivirus.make = ^{ return (NSViewController *)[[MCAntivirusViewController alloc] init]; };
+
         MCToolEntry *home = [[MCToolEntry alloc] init];
         home.title = @"Home";
         home.tool = MCToolHome;
@@ -192,7 +199,7 @@
             return (NSViewController *)hub;
         };
 
-        _tools = @[ home, cleaner, largeFiles, photoCleaner, organizer, performance ];
+        _tools = @[ home, cleaner, largeFiles, photoCleaner, organizer, performance, antivirus ];
 
         _sidebar = [[MCToolSidebarController alloc] init];
         _sidebar.tools = _tools;

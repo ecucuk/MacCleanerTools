@@ -18,6 +18,10 @@ behind one sidebar:
 - **Performance** — a live view of your processes by CPU, memory and
   uptime, with heavy consumers flagged, guarded Quit / Force Quit, and a
   one-click **Optimize** that finds processes worth reclaiming.
+- **Antivirus** — an on-demand scan of Downloads, Desktop and Applications
+  for Apple's XProtect signatures, quarantined unsigned programs and
+  suspicious LaunchAgents/LaunchDaemons. Report-only until you move a
+  finding to the Trash. It is not a real-time antivirus.
 
 Ships as two front ends over one core library (`maccleaner_core`) — a
 `mac_cleaner` CLI and a `MacCleaner.app` AppKit GUI. Scanning, the safety
@@ -88,6 +92,9 @@ build/mac_cleaner organize --under=~/Pictures/Unsorted --by=place    # photos by
 build/mac_cleaner organize --under=~/Pictures/Unsorted --dest=~/Pictures/Sorted --apply
 build/mac_cleaner optimize                       # report reclaimable processes
 build/mac_cleaner optimize --apply               # and terminate them (SIGTERM)
+build/mac_cleaner malware                        # scan ~/Downloads, ~/Desktop, ~/Applications, /Applications
+build/mac_cleaner malware --path=~/Projects      # scan another folder instead (repeatable)
+build/mac_cleaner malware --trash                # then move Detected/Suspicious items to the Trash
 ```
 
 ## Usage — GUI
@@ -210,6 +217,48 @@ so the first refresh reads 0 — there is no baseline yet. The *Heavy /
 Long-Running* filter selects processes over 50 % CPU, over 1 GB of memory,
 or running for more than a day while still burning 10 %+ CPU. Sampling
 stops while the tool is off-screen, and **Pause** freezes it for reading.
+
+**Antivirus** scans on demand. It is a signature and heuristic scanner, not
+a real-time engine, and it does not replace XProtect, which already checks
+every program macOS launches. It adds a report you can run on any folder,
+plus a look at what starts at login. **Scan** checks `~/Downloads`,
+`~/Desktop`, `~/Applications` and `/Applications`; **Choose Folder…** scans
+one folder instead. A full default scan of one test Mac (467,000 files)
+took about 5½ minutes.
+
+| Severity | Kind | Rule |
+|---|---|---|
+| Detected | Signature | A rule from `XProtect.plist` (or the built-in EICAR test rule) matches the file |
+| Suspicious | Quarantine | An executable Mach-O file has `com.apple.quarantine` and is unsigned or ad-hoc signed |
+| Suspicious | Persistence | A LaunchAgent/LaunchDaemon starts an unsigned program, a downloaded ad-hoc signed program, any program under `/tmp` or `/Users/Shared`, or an unsigned/ad-hoc one in a hidden folder |
+| Info | Persistence | The plist is unreadable, names no program or a relative one, the program is missing, or it is ad-hoc signed but not downloaded (normal for Homebrew services) |
+
+- **Signatures.** The rules come from
+  `/Library/Apple/System/Library/CoreServices/XProtect.bundle/Contents/Resources/XProtect.plist`.
+  Its hex patterns (with `??`, `{n}`, `{-n}` and `*` wildcards) and SHA-1
+  identities are matched in the core. An entry that uses a form the parser
+  does not know, for example an alternation `(a|b)`, is dropped whole and
+  never loosened: 91 of 94 entries load on macOS 27.2. Apple's newer
+  `XProtect.yara` rules need a YARA engine, which would be the first
+  third-party dependency, so they are not used. The type constraint of a
+  rule is approximated as "has an execute bit or is Mach-O".
+- **Code signatures** come from Security.framework
+  (`SecStaticCodeCheckValidity`; `anchor apple` marks Apple's own code).
+  Apple-signed files and everything under `/System` are never reported and
+  never touched.
+- **Limits.** Files over 64 MB are not matched against signatures (they still
+  get the quarantine check). Rules that describe several files of one bundle
+  cannot match a single file. A broken or revoked signature is not flagged.
+  Login items registered through `SMAppService` are not listed.
+- **Test it** with the harmless EICAR test string in a file under
+  `~/Downloads`: it shows as Detected.
+
+**Move to Trash** acts only on the rows you select and asks first. Every
+item passes the same safety check as a delete, with the scan roots and the
+launch-agent folders as the allowed roots. Items in `/Applications` or
+`/Library` therefore stay put: they need an administrator, so remove them in
+Finder. A trashed launch agent that is already running stops at the next
+login.
 
 ### Optimize
 
@@ -381,7 +430,10 @@ allowlist-first rather than denylist-first:
    `renamex_np(RENAME_EXCL)` call, which refuses to replace an existing
    file. A move to another volume copies first, then removes the source.
    The destination may not be inside a Photos library or a system path.
-8. **Dry run is the default for `clean`** (and for `organize`). You always see exactly what
+8. **Antivirus is report-only by default.** `malware::trashFinding()` refuses
+   `/System` and Apple-signed code before `isSafeToDelete()` runs, and the
+   only remediation is the Trash.
+9. **Dry run is the default for `clean`** (and for `organize`). You always see exactly what
    would be deleted, and its size, before anything happens; `--apply` is a
    separate, explicit step.
 
@@ -425,15 +477,16 @@ allowlist-first rather than denylist-first:
 ```text
 include/maccleaner/   public headers (types, safety, scanner, cleaner, trash, cli, format)
 src/                  core implementation + CLI front end (main.cpp)
-src/platform/         OS-specific Trash backend (trash_mac.mm / trash_fallback.cpp)
+src/platform/         OS-specific backends: Trash, images, organizer moves, and
+                      malware_mac.mm (Security, CommonCrypto, XProtect.plist)
 src/gui/              AppKit front end: MCMainWindowController = sidebar shell,
                       MCHomeViewController = Home hub, MCSplashWindow = splash,
                       MCCleanerViewController / MCLargeFilesViewController /
                       MCPerformanceViewController / MCPhotosViewController /
-                      MCOrganizerViewController = tools,
+                      MCOrganizerViewController / MCAntivirusViewController = tools,
                       MCOptimizeSheetController = the Optimize review sheet,
                       MCScanModel / MCBigFilesModel / MCProcessModel /
-                      MCPhotoModel / MCOrganizerModel =
+                      MCPhotoModel / MCOrganizerModel / MCMalwareModel =
                       core wrappers + threading,
                       main.mm = NSApplication
 src/gui/viz/          SwiftUI Activity window (own static lib, bridged via

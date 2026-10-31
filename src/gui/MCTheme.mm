@@ -23,6 +23,7 @@ Gradient gradientFor(MCTool tool) {
         case MCToolPerformance: return {0xc2410c, 0xd97706}; // orange -> amber
         case MCToolOrganizer: return {0x0369a1, 0x4f46e5};   // sky -> indigo
         case MCToolHome: return {0x4338ca, 0x0891b2};        // indigo -> cyan
+        case MCToolAntivirus: return {0xb91c1c, 0xc2410c};   // red -> orange
     }
     return {0x6d28d9, 0x2563eb};
 }

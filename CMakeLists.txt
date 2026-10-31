@@ -163,12 +163,14 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
         src/gui/MCProcessModel.mm
         src/gui/MCPhotoModel.mm
         src/gui/MCOrganizerModel.mm
+        src/gui/MCMalwareModel.mm
         src/gui/MCMainWindowController.mm
         src/gui/MCCleanerViewController.mm
         src/gui/MCLargeFilesViewController.mm
         src/gui/MCPerformanceViewController.mm
         src/gui/MCPhotosViewController.mm
         src/gui/MCOrganizerViewController.mm
+        src/gui/MCAntivirusViewController.mm
         src/gui/MCOptimizeSheetController.mm
         src/gui/MCUsageSummaryView.mm
         src/gui/MCTheme.mm

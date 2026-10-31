@@ -66,6 +66,7 @@ void printUsage() {
         "  mac_cleaner optimize [--apply]\n"
         "  mac_cleaner organize --under=<path> [--dest=<path>] [--by=content|place] [--apply] [--yes]\n"
         "  mac_cleaner malware [--path=<path>]... [--trash] [--yes]\n"
+        "  mac_cleaner updates [--upgrade <name>...]\n"
         "\n"
         "Commands:\n"
         "  scan       Report what would be cleaned and how much space it would free (default).\n"
@@ -81,6 +82,8 @@ void printUsage() {
         "             Music, Documents and Other. A dry run unless --apply; never overwrites.\n"
         "  malware    Scan for XProtect.plist signatures, quarantined unsigned programs and\n"
         "             suspicious LaunchAgents/LaunchDaemons. Reports only; not a real-time AV.\n"
+        "  updates    List outdated Homebrew, MacPorts, App Store and Sparkle software\n"
+        "             (runs brew update and fetches App Store and appcast versions).\n"
         "\n"
         "Options (scan/clean):\n"
         "  --only=<categories>  Comma-separated subset, e.g. --only=caches,derived-data\n"
@@ -118,6 +121,10 @@ void printUsage() {
         "                        ~/Applications, /Applications). Launchd plists are always checked.\n"
         "  --trash               Move Detected and Suspicious files to the Trash after a prompt.\n"
         "  --yes                 Skip the confirmation prompt.\n"
+        "Options (updates):\n"
+        "  --upgrade <name>...   Upgrade these outdated Homebrew items, one at a time.\n"
+        "                        Other sources are updated from the App Store, the app\n"
+        "                        itself, or Terminal (sudo port upgrade <name>).\n"
         "\n"
         "  --help                 Show this message.\n";
 }
@@ -130,7 +137,7 @@ std::optional<CliOptions> parseArgs(int argc, char** argv, CliParseError& error)
     std::size_t index = 0;
     if (!args.empty() && (args[0] == "scan" || args[0] == "clean" || args[0] == "bigfiles" ||
                           args[0] == "processes" || args[0] == "optimize" || args[0] == "photos" ||
-                          args[0] == "organize" || args[0] == "malware")) {
+                          args[0] == "organize" || args[0] == "malware" || args[0] == "updates")) {
         options.command = (args[0] == "scan")       ? Command::Scan
                           : (args[0] == "clean")     ? Command::Clean
                           : (args[0] == "bigfiles")  ? Command::BigFiles
@@ -138,6 +145,7 @@ std::optional<CliOptions> parseArgs(int argc, char** argv, CliParseError& error)
                           : (args[0] == "photos")    ? Command::Photos
                           : (args[0] == "organize")  ? Command::Organize
                           : (args[0] == "malware")   ? Command::Malware
+                          : (args[0] == "updates")   ? Command::Updates
                                                       : Command::Optimize;
         index = 1;
     }
@@ -220,6 +228,18 @@ std::optional<CliOptions> parseArgs(int argc, char** argv, CliParseError& error)
             options.blurThreshold = parsed;
         } else if (arg.rfind("--dest=", 0) == 0) {
             options.dest = std::string(arg.substr(std::string_view("--dest=").size()));
+        } else if (arg == "--upgrade") {
+            if (options.command != Command::Updates) {
+                error.message = "--upgrade only works with the updates command";
+                return std::nullopt;
+            }
+            while (index + 1 < args.size() && args[index + 1].rfind("--", 0) != 0) {
+                options.upgradeNames.emplace_back(args[++index]);
+            }
+            if (options.upgradeNames.empty()) {
+                error.message = "--upgrade needs at least one name";
+                return std::nullopt;
+            }
         } else if (arg == "--by=content" || arg == "--by=place") {
             options.photoLayout = arg == "--by=place" ? organizer::PhotoLayout::Place : organizer::PhotoLayout::Content;
         } else {

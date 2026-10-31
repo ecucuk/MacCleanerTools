@@ -6,6 +6,7 @@
 #import "MCPerformanceViewController.h"
 #import "MCAntivirusViewController.h"
 #import "MCOrganizerViewController.h"
+#import "MCUpdaterViewController.h"
 #import "MCPhotosViewController.h"
 #import "MCTheme.h"
 
@@ -199,7 +200,13 @@
             return (NSViewController *)hub;
         };
 
-        _tools = @[ home, cleaner, largeFiles, photoCleaner, organizer, performance, antivirus ];
+        MCToolEntry *updater = [[MCToolEntry alloc] init];
+        updater.title = @"Updater";
+        updater.tool = MCToolUpdater;
+        updater.symbolName = @"arrow.triangle.2.circlepath";
+        updater.make = ^{ return (NSViewController *)[[MCUpdaterViewController alloc] init]; };
+
+        _tools = @[ home, cleaner, largeFiles, photoCleaner, organizer, updater, performance, antivirus ];
 
         _sidebar = [[MCToolSidebarController alloc] init];
         _sidebar.tools = _tools;

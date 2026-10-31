@@ -2,6 +2,7 @@
 
 #import "MCScanModel.h"
 #import "MCToolBanner.h"
+#import "MCUpdaterViewController.h"
 
 #include "maccleaner/format.hpp"
 #include "maccleaner/processes.hpp"
@@ -211,6 +212,16 @@ constexpr NSInteger kColumns = 2;
         case MCToolOrganizer: return @"Sort a folder by type or place";
         case MCToolPerformance: return @"Processes, CPU and memory";
         case MCToolAntivirus: return @"Scan for known malware";
+        case MCToolUpdater: {
+            // Cached from the last complete check: a live check is too slow for Home.
+            NSNumber *cached = [NSUserDefaults.standardUserDefaults objectForKey:MCUpdaterCachedCountKey];
+            if (cached == nil) {
+                return @"Homebrew, App Store and app updates";
+            }
+            return cached.integerValue == 0 ? @"Up to date at last check"
+                                            : [NSString stringWithFormat:@"%ld update(s) at last check",
+                                                                         (long)cached.integerValue];
+        }
         case MCToolHome: return @"";
     }
     return @"";
@@ -225,6 +236,7 @@ constexpr NSInteger kColumns = 2;
 }
 
 - (void)refreshSummaries {
+    [self setSummary:[self staticSummaryForTool:MCToolUpdater] forTool:MCToolUpdater];
     if (!self.scanning) {
         self.scanning = YES;
         [self setSummary:@"Scanning…" forTool:MCToolCleaner];

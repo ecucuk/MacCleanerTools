@@ -50,6 +50,8 @@ set(MACCLEANER_CORE_SOURCES
     src/organizer.cpp
     src/photos.cpp
     src/malware.cpp
+    src/json.cpp
+    src/updater.cpp
 )
 
 set(MACCLEANER_APPLE_SOURCES)
@@ -60,10 +62,10 @@ else()
 endif()
 if(APPLE)
     list(APPEND MACCLEANER_APPLE_SOURCES src/platform/image_mac.mm src/platform/organizer_mac.mm
-        src/platform/malware_mac.mm)
+        src/platform/malware_mac.mm src/platform/updater_mac.mm)
 else()
     list(APPEND MACCLEANER_APPLE_SOURCES src/platform/image_fallback.cpp src/platform/organizer_fallback.cpp
-        src/platform/malware_fallback.cpp)
+        src/platform/malware_fallback.cpp src/platform/updater_fallback.cpp)
 endif()
 
 add_library(maccleaner_core STATIC
@@ -99,7 +101,8 @@ if(APPLE)
     target_link_libraries(maccleaner_core PRIVATE
         ${FOUNDATION_FRAMEWORK} ${IMAGEIO_FRAMEWORK} ${COREGRAPHICS_FRAMEWORK} ${IOKIT_FRAMEWORK}
         ${AVFOUNDATION_FRAMEWORK} ${VISION_FRAMEWORK} ${MAPKIT_FRAMEWORK} ${CORELOCATION_FRAMEWORK} ${SECURITY_FRAMEWORK})
-    set_source_files_properties(src/platform/image_mac.mm src/platform/organizer_mac.mm src/platform/malware_mac.mm PROPERTIES
+    set_source_files_properties(src/platform/image_mac.mm src/platform/organizer_mac.mm src/platform/malware_mac.mm
+        src/platform/updater_mac.mm PROPERTIES
         COMPILE_FLAGS "-fobjc-arc"
     )
 endif()
@@ -164,6 +167,7 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
         src/gui/MCPhotoModel.mm
         src/gui/MCOrganizerModel.mm
         src/gui/MCMalwareModel.mm
+        src/gui/MCUpdaterModel.mm
         src/gui/MCMainWindowController.mm
         src/gui/MCHomeViewController.mm
         src/gui/MCSplashWindow.mm
@@ -173,6 +177,7 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
         src/gui/MCPhotosViewController.mm
         src/gui/MCOrganizerViewController.mm
         src/gui/MCAntivirusViewController.mm
+        src/gui/MCUpdaterViewController.mm
         src/gui/MCOptimizeSheetController.mm
         src/gui/MCUsageSummaryView.mm
         src/gui/MCTheme.mm

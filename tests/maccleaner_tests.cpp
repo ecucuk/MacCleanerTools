@@ -11,15 +11,19 @@
 #include "maccleaner/processes.hpp"
 #include "maccleaner/cli.hpp"
 #include "maccleaner/format.hpp"
+#include "maccleaner/json.hpp"
 #include "maccleaner/malware.hpp"
 #include "maccleaner/safety.hpp"
 #include "maccleaner/scanner.hpp"
 #include "maccleaner/walk.hpp"
+#include "maccleaner/updater.hpp"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <fstream>
+#include <set>
+#include <functional>
 #include <iostream>
 #include <map>
 #include <numeric>
@@ -66,6 +70,8 @@ int g_failures = 0;
 namespace fs = std::filesystem;
 namespace organizer = maccleaner::organizer;
 namespace malware = maccleaner::malware;
+namespace json = maccleaner::json;
+namespace updater = maccleaner::updater;
 using maccleaner::humanReadableBytes;
 using maccleaner::safety::AllowedRoots;
 using maccleaner::safety::isSafeToDelete;
@@ -2525,6 +2531,444 @@ void testReadLaunchTargetBadString() {
 }
 #endif
 
+// --- json ------------------------------------------------------------------
+
+void testJsonParsesNested() {
+    const auto v = json::parse(R"({"a":[1,true,null,{"b":"x"}]})");
+    CHECK(v.has_value());
+    if (!v) return;
+    const json::Value* a = v->find("a");
+    CHECK(a != nullptr && a->array.size() == 4);
+    if (!a || a->array.size() != 4) return;
+    CHECK_EQ(a->array[0].number, 1.0);
+    CHECK(a->array[1].type == json::Value::Type::Bool && a->array[1].boolean);
+    CHECK(a->array[2].type == json::Value::Type::Null);
+    CHECK_EQ(a->array[3].str("b"), std::string("x"));
+    CHECK(v->find("missing") == nullptr);
+    CHECK_EQ(v->str("a"), std::string()); // not a string
+}
+
+void testJsonEscapes() {
+    // The input is built with kBackslash so the source holds JSON escapes, not
+    // the characters they stand for.
+    const std::string kBackslash(1, '\\');
+    const auto v = json::parse("\"a" + kBackslash + "\"b" + kBackslash + kBackslash + "c" + kBackslash + "n" +
+                               kBackslash + "u00e9\"");
+    CHECK(v.has_value() && v->string == "a\"b\\c\n\xC3\xA9");
+    const auto emoji = json::parse("\"" + kBackslash + "ud83d" + kBackslash + "ude00\"");
+    CHECK(emoji.has_value() && emoji->string == "\xF0\x9F\x98\x80");
+    CHECK(!json::parse("\"" + kBackslash + "ud83d\"").has_value()); // unpaired high surrogate
+    const auto num = json::parse(" -12.5e1 ");
+    CHECK(num.has_value() && num->number == -125.0);
+}
+
+void testJsonRejectsMalformed() {
+    CHECK(!json::parse("{").has_value());
+    CHECK(!json::parse("[1,]").has_value());
+    CHECK(!json::parse("{} x").has_value());
+    CHECK(!json::parse("").has_value());
+    CHECK(!json::parse(R"({"a" 1})").has_value());
+    CHECK(!json::parse(std::string(100, '[') + std::string(100, ']')).has_value()); // depth cap
+    CHECK(json::parse(std::string(10, '[') + std::string(10, ']')).has_value());
+}
+
+// --- updater: versions and parsers ------------------------------------------
+
+void testCompareVersions() {
+    using updater::compareVersions;
+    CHECK(compareVersions("1.10", "1.9") > 0);
+    CHECK(compareVersions("1.9", "1.10") < 0);
+    CHECK(compareVersions("1.0", "1") == 0);
+    CHECK(compareVersions("1.0", "1.0.0") == 0);
+    CHECK(compareVersions("2.0b1", "2.0") < 0);
+    CHECK(compareVersions("2.0", "2.0b1") > 0);
+    CHECK(compareVersions("6.43", "6.5") > 0);
+    CHECK(compareVersions("1.0_1", "1.0_0") > 0);
+    CHECK(compareVersions("2.0B1", "2.0b1") == 0);
+    CHECK(compareVersions("99999999999999999999999.1", "99999999999999999999999.0") > 0); // no overflow
+}
+
+const char* kBrewOutdatedJson = R"({"formulae":[{"name":"wget","installed_versions":["1.21.2","1.21.3"],"current_version":"1.21.4","pinned":false},{"name":"node","installed_versions":["20.1"],"current_version":"21.0","pinned":true}],"casks":[{"name":"firefox","installed_versions":["120.0"],"current_version":"121.0"}]})";
+
+void testBrewOutdatedParsesFormulaeAndCasks() {
+    const auto items = updater::parseBrewOutdated(kBrewOutdatedJson);
+    CHECK_EQ(items.size(), std::size_t(3));
+    if (items.size() != 3) return;
+    CHECK(items[0].source == updater::Source::Homebrew);
+    CHECK_EQ(items[0].name, std::string("wget"));
+    CHECK_EQ(items[0].installedVersion, std::string("1.21.3"));
+    CHECK_EQ(items[0].latestVersion, std::string("1.21.4"));
+    CHECK(!items[0].isCask && !items[0].pinned);
+    CHECK(items[1].pinned);
+    CHECK_EQ(items[2].name, std::string("firefox"));
+    CHECK(items[2].isCask);
+}
+
+void testBrewOutdatedSkipsLeadingNoise() {
+    const auto items = updater::parseBrewOutdated(std::string("Warning: something {odd}\n") + kBrewOutdatedJson);
+    CHECK_EQ(items.size(), std::size_t(3));
+    CHECK(updater::parseBrewOutdated(R"({"formulae":[],"casks":[]})").empty());
+    CHECK(updater::parseBrewOutdated("Error: no JSON here").empty());
+    CHECK(updater::parseBrewOutdated(R"({"formulae":[{"name":)").empty());
+}
+
+void testBrewCaskApps() {
+    const auto apps = updater::parseBrewCaskApps(
+        R"({"formulae":[],"casks":[{"token":"linearmouse","artifacts":[{"app":["LinearMouse.app"]},{"zap":[]}]},)"
+        R"({"token":"odd","artifacts":[{"app":[{"target":"X.app"}]}]}]})");
+    CHECK_EQ(apps.size(), std::size_t(1));
+    CHECK(apps.count("LinearMouse.app") == 1);
+    CHECK(updater::parseBrewCaskApps("garbage").empty());
+}
+
+void testPortOutdated() {
+    const auto items = updater::parsePortOutdated(
+        "The following installed ports are outdated:\n"
+        "curl                           8.4.0_0 < 8.5.0_0\n"
+        "git  2.42.0_1 < 2.43.0_0\n");
+    CHECK_EQ(items.size(), std::size_t(2));
+    if (items.size() != 2) return;
+    CHECK(items[0].source == updater::Source::MacPorts);
+    CHECK_EQ(items[0].name, std::string("curl"));
+    CHECK_EQ(items[0].installedVersion, std::string("8.4.0_0"));
+    CHECK_EQ(items[0].latestVersion, std::string("8.5.0_0"));
+    CHECK_EQ(items[1].name, std::string("git"));
+    CHECK(updater::parsePortOutdated("No installed ports are outdated.\n").empty());
+}
+
+void testItunesLookup() {
+    const auto versions = updater::parseItunesLookup(
+        R"({"resultCount":2,"results":[{"trackId":6443819966,"version":"6.43"},{"trackId":1,"version":"2.0"}]})");
+    CHECK_EQ(versions.size(), std::size_t(2));
+    CHECK(versions.count("6443819966") && versions.at("6443819966") == "6.43");
+    CHECK(versions.count("1") && versions.at("1") == "2.0");
+    CHECK(updater::parseItunesLookup("<html>").empty());
+}
+
+void testAppcastSkipsChannels() {
+    const auto latest = updater::parseAppcast(R"(<rss><channel><title>X</title>
+<item><title>Beta</title><sparkle:channel>beta</sparkle:channel>
+  <enclosure url="https://x/b.zip" sparkle:version="200" sparkle:shortVersionString="2.0b"/></item>
+<item><title>1.5</title><enclosure url="https://x/a.zip" sparkle:version="150" sparkle:shortVersionString="1.5" length="1"/></item>
+<item><title>1.4</title><sparkle:version>140</sparkle:version><sparkle:shortVersionString>1.4</sparkle:shortVersionString></item>
+</channel></rss>)");
+    CHECK(latest.has_value());
+    if (!latest) return;
+    CHECK_EQ(latest->version, std::string("150"));
+    CHECK_EQ(latest->shortVersion, std::string("1.5"));
+    CHECK(!updater::parseAppcast("<rss><channel></channel></rss>").has_value());
+}
+
+// --- updater: runner, check, upgrade ----------------------------------------
+
+// Records every argv and answers from a callback, so no test calls real
+// brew, port, mdls or curl.
+struct FakeRunner {
+    std::vector<std::vector<std::string>> calls;
+    std::function<updater::CommandResult(const std::vector<std::string>&)> answer =
+        [](const std::vector<std::string>&) { return updater::CommandResult{0, ""}; };
+
+    updater::RunFn fn() {
+        return [this](const std::vector<std::string>& argv, int) {
+            calls.push_back(argv);
+            return answer(argv);
+        };
+    }
+    bool ran(std::string_view exe) const {
+        return std::any_of(calls.begin(), calls.end(), [&](const auto& c) { return !c.empty() && c[0] == exe; });
+    }
+};
+
+bool hasArg(const std::vector<std::string>& argv, std::string_view arg) {
+    return std::find(argv.begin(), argv.end(), arg) != argv.end();
+}
+
+// An environment over fake .app folders in `tree`, with Info.plist data and
+// App Store receipts taken from the maps instead of the bundles.
+updater::Environment fakeEnvironment(const ScratchTree& tree,
+                                     std::map<std::string, updater::BundleInfo> bundles,
+                                     std::set<std::string> receipts = {}) {
+    for (const auto& [name, info] : bundles) {
+        fs::create_directories(tree.root() / name / "Contents");
+    }
+    updater::Environment env;
+    env.appFolders = {tree.root().string()};
+    env.readBundle = [bundles](const std::string& path) -> std::optional<updater::BundleInfo> {
+        const auto it = bundles.find(fs::path(path).filename().string());
+        return it == bundles.end() ? std::nullopt : std::optional(it->second);
+    };
+    env.exists = [receipts](const std::string& path) {
+        return receipts.count(fs::path(path).parent_path().parent_path().parent_path().filename().string()) > 0;
+    };
+    return env;
+}
+
+const updater::SourceStatus* statusOf(const updater::CheckResult& r, updater::Source s) {
+    for (const auto& st : r.sources) {
+        if (st.source == s) return &st;
+    }
+    return nullptr;
+}
+
+void testRunCommandCapturesOutput() {
+    const auto r = updater::runCommand({"/bin/echo", "hi"}, 5);
+    CHECK_EQ(r.exitCode, 0);
+    CHECK_EQ(r.output, std::string("hi\n"));
+    CHECK(updater::runCommand({"/nonexistent/tool"}, 5).exitCode != 0);
+    const auto err = updater::runCommand({"/bin/ls", "/nonexistent/dir"}, 5);
+    CHECK(err.exitCode != 0 && err.output.find("nonexistent") != std::string::npos); // stderr merged
+}
+
+void testRunCommandTimesOut() {
+    const auto start = std::chrono::steady_clock::now();
+    const auto r = updater::runCommand({"/bin/sleep", "5"}, 1);
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+    CHECK_EQ(r.exitCode, -1);
+    CHECK(elapsed < std::chrono::seconds(3));
+}
+
+void testCheckMissingToolsAreNotErrors() {
+    ScratchTree tree;
+    FakeRunner runner;
+    const auto env = fakeEnvironment(tree, {});
+    const auto r = updater::checkUpdates(runner.fn(), env, [] { return false; });
+    CHECK(runner.calls.empty());
+    CHECK(r.items.empty());
+    const auto* brew = statusOf(r, updater::Source::Homebrew);
+    const auto* port = statusOf(r, updater::Source::MacPorts);
+    CHECK(brew && !brew->available && brew->error.empty());
+    CHECK(port && !port->available && port->error.empty());
+    CHECK_EQ(r.sources.size(), std::size_t(4));
+}
+
+void testCheckRunsBrewUpdateThenOutdated() {
+    ScratchTree tree;
+    FakeRunner runner;
+    runner.answer = [](const std::vector<std::string>& argv) {
+        if (hasArg(argv, "outdated")) return updater::CommandResult{0, kBrewOutdatedJson};
+        return updater::CommandResult{0, "{}"};
+    };
+    auto env = fakeEnvironment(tree, {});
+    env.brewPath = "/opt/homebrew/bin/brew";
+    const auto r = updater::checkUpdates(runner.fn(), env, [] { return false; });
+    CHECK_EQ(runner.calls.size(), std::size_t(3));
+    if (runner.calls.size() == 3) {
+        CHECK(runner.calls[0] == (std::vector<std::string>{"/opt/homebrew/bin/brew", "update"}));
+        CHECK(runner.calls[1] == (std::vector<std::string>{"/opt/homebrew/bin/brew", "outdated", "--json=v2"}));
+        CHECK(runner.calls[2] ==
+              (std::vector<std::string>{"/opt/homebrew/bin/brew", "info", "--cask", "--json=v2", "--installed"}));
+    }
+    CHECK_EQ(r.items.size(), std::size_t(3));
+    const auto* brew = statusOf(r, updater::Source::Homebrew);
+    CHECK(brew && brew->available && brew->error.empty());
+}
+
+void testCheckReportsBrewFailureKeepsOthers() {
+    ScratchTree tree;
+    FakeRunner runner;
+    runner.answer = [](const std::vector<std::string>& argv) {
+        if (hasArg(argv, "outdated")) return updater::CommandResult{1, "Error: lock held\n"};
+        if (argv[0] == "/usr/bin/curl")
+            return updater::CommandResult{0, R"(<item><enclosure sparkle:version="150" sparkle:shortVersionString="1.5"/></item>)"};
+        return updater::CommandResult{0, ""};
+    };
+    auto env = fakeEnvironment(tree, {{"Bar.app", {"1.0", "100", "https://bar.example/appcast.xml"}}});
+    env.brewPath = "/opt/homebrew/bin/brew";
+    const auto r = updater::checkUpdates(runner.fn(), env, [] { return false; });
+    const auto* brew = statusOf(r, updater::Source::Homebrew);
+    CHECK(brew && brew->available && brew->error.find("lock held") != std::string::npos);
+    CHECK_EQ(r.items.size(), std::size_t(1));
+    CHECK(!r.items.empty() && r.items[0].source == updater::Source::Sparkle);
+}
+
+void testCheckSparkleSkipsCaskAppsAndHttp() {
+    ScratchTree tree;
+    FakeRunner runner;
+    runner.answer = [](const std::vector<std::string>& argv) {
+        if (hasArg(argv, "info"))
+            return updater::CommandResult{0, R"({"casks":[{"artifacts":[{"app":["LinearMouse.app"]}]}]})"};
+        if (hasArg(argv, "outdated")) return updater::CommandResult{0, R"({"formulae":[],"casks":[]})"};
+        if (argv[0] == "/usr/bin/curl")
+            return updater::CommandResult{0, R"(<item><enclosure sparkle:version="150" sparkle:shortVersionString="1.5"/></item>)"};
+        return updater::CommandResult{0, ""};
+    };
+    auto env = fakeEnvironment(tree, {
+        {"LinearMouse.app", {"0.12.0", "50", "https://linearmouse.app/appcast.xml"}},
+        {"Foo.app", {"1.0", "100", "http://foo.example/appcast.xml"}},
+        {"Bar.app", {"1.0", "100", "https://bar.example/appcast.xml"}},
+        {"Same.app", {"1.5", "150", "https://same.example/appcast.xml"}},
+    });
+    env.brewPath = "/opt/homebrew/bin/brew";
+    const auto r = updater::checkUpdates(runner.fn(), env, [] { return false; });
+    CHECK_EQ(r.items.size(), std::size_t(1));
+    if (r.items.size() == 1) {
+        CHECK_EQ(r.items[0].name, std::string("Bar"));
+        CHECK_EQ(r.items[0].installedVersion, std::string("1.0"));
+        CHECK_EQ(r.items[0].latestVersion, std::string("1.5"));
+        CHECK_EQ(r.items[0].appPath, (tree.root() / "Bar.app").string());
+    }
+    std::vector<std::string> urls;
+    for (const auto& c : runner.calls) {
+        if (c[0] == "/usr/bin/curl") urls.push_back(c.back());
+    }
+    CHECK(urls == (std::vector<std::string>{"https://bar.example/appcast.xml", "https://same.example/appcast.xml"}));
+    for (const auto& c : runner.calls) {
+        if (c[0] == "/usr/bin/curl") CHECK(hasArg(c, "=https") && hasArg(c, "--max-filesize"));
+    }
+}
+
+void testCheckSkipsSparkleWithoutBundleVersion() {
+    ScratchTree tree;
+    FakeRunner runner;
+    const auto env = fakeEnvironment(tree, {{"Odd.app", {"1.0", "", "https://odd.example/appcast.xml"}}});
+    const auto r = updater::checkUpdates(runner.fn(), env, [] { return false; });
+    CHECK(r.items.empty());
+    CHECK(!runner.ran("/usr/bin/curl"));
+}
+
+void testCheckAppStoreBatchesLookup() {
+    ScratchTree tree;
+    FakeRunner runner;
+    runner.answer = [](const std::vector<std::string>& argv) {
+        if (argv[0] == "/usr/bin/mdls") return updater::CommandResult{0, std::string("111") + '\0' + "222" + '\0' + "(null)"};
+        if (argv[0] == "/usr/bin/curl")
+            return updater::CommandResult{0, R"({"results":[{"trackId":111,"version":"2.0"},{"trackId":222,"version":"1.0"}]})"};
+        return updater::CommandResult{0, ""};
+    };
+    auto env = fakeEnvironment(tree,
+                               {{"A.app", {"1.0", "1", ""}}, {"B.app", {"1.0", "1", ""}}, {"C.app", {"1.0", "1", ""}}},
+                               {"A.app", "B.app", "C.app"});
+    env.country = "tr";
+    const auto r = updater::checkUpdates(runner.fn(), env, [] { return false; });
+    int curls = 0;
+    for (const auto& c : runner.calls) {
+        if (c[0] == "/usr/bin/curl") {
+            ++curls;
+            CHECK(c.back().find("id=111,222&country=tr") != std::string::npos);
+        }
+        if (c[0] == "/usr/bin/mdls") CHECK_EQ(c.size(), std::size_t(7)); // 4 fixed args + 3 apps
+    }
+    CHECK_EQ(curls, 1);
+    CHECK_EQ(r.items.size(), std::size_t(1));
+    if (r.items.size() == 1) {
+        CHECK(r.items[0].source == updater::Source::AppStore);
+        CHECK_EQ(r.items[0].storeId, std::string("111"));
+        CHECK_EQ(r.items[0].name, std::string("A"));
+        CHECK_EQ(r.items[0].latestVersion, std::string("2.0"));
+    }
+}
+
+void testCheckCancelSkipsRemainingSources() {
+    ScratchTree tree;
+    FakeRunner runner;
+    auto env = fakeEnvironment(tree, {{"Bar.app", {"1.0", "100", "https://bar.example/appcast.xml"}}});
+    env.brewPath = "/opt/homebrew/bin/brew";
+    env.portPath = "/opt/local/bin/port";
+    updater::checkUpdates(runner.fn(), env, [&] { return !runner.calls.empty(); });
+    CHECK_EQ(runner.calls.size(), std::size_t(1));
+}
+
+void testUpgradeCommand() {
+    updater::Environment env;
+    env.brewPath = "/opt/homebrew/bin/brew";
+    updater::OutdatedItem formula;
+    formula.name = "wget";
+    CHECK(updater::upgradeCommand(env, formula) ==
+          (std::vector<std::string>{"/usr/bin/env", "HOMEBREW_NO_AUTO_UPDATE=1", "NONINTERACTIVE=1",
+                                    "/opt/homebrew/bin/brew", "upgrade", "wget"}));
+    updater::OutdatedItem cask = formula;
+    cask.name = "firefox";
+    cask.isCask = true;
+    CHECK(updater::upgradeCommand(env, cask) ==
+          (std::vector<std::string>{"/usr/bin/env", "HOMEBREW_NO_AUTO_UPDATE=1", "NONINTERACTIVE=1",
+                                    "/opt/homebrew/bin/brew", "upgrade", "--cask", "firefox"}));
+    CHECK_EQ(updater::manualCommand(cask), std::string("brew upgrade --cask firefox"));
+    updater::OutdatedItem port;
+    port.source = updater::Source::MacPorts;
+    port.name = "curl";
+    CHECK_EQ(updater::manualCommand(port), std::string("sudo port upgrade curl"));
+
+    FakeRunner runner;
+    runner.answer = [](const std::vector<std::string>&) { return updater::CommandResult{1, "boom\n"}; };
+    const auto r = updater::upgradeBrew(runner.fn(), env, cask);
+    CHECK_EQ(r.exitCode, 1);
+    CHECK(runner.calls.size() == 1 && runner.calls[0] == updater::upgradeCommand(env, cask));
+}
+
+void testCliParsesUpdates() {
+    using maccleaner::Command;
+    using maccleaner::parseArgs;
+    maccleaner::CliParseError error;
+    const char* list[] = {"mac_cleaner", "updates"};
+    const auto listed = parseArgs(2, const_cast<char**>(list), error);
+    CHECK(listed.has_value() && listed->command == Command::Updates && listed->upgradeNames.empty());
+
+    const char* upgrade[] = {"mac_cleaner", "updates", "--upgrade", "wget", "firefox"};
+    const auto upgraded = parseArgs(5, const_cast<char**>(upgrade), error);
+    CHECK(upgraded.has_value() &&
+          upgraded->upgradeNames == (std::vector<std::string>{"wget", "firefox"}));
+
+    const char* noNames[] = {"mac_cleaner", "updates", "--upgrade"};
+    CHECK(!parseArgs(3, const_cast<char**>(noNames), error).has_value());
+    const char* wrongCommand[] = {"mac_cleaner", "scan", "--upgrade", "wget"};
+    CHECK(!parseArgs(4, const_cast<char**>(wrongCommand), error).has_value());
+}
+
+// --- updater: final-review regressions --------------------------------------
+
+void testBrewOutdatedIgnoresTrailingWarning() {
+    const auto items = updater::parseBrewOutdated(std::string(kBrewOutdatedJson) + "\nWarning: trailing\n");
+    CHECK_EQ(items.size(), std::size_t(3));
+}
+
+void testCheckReportsBrewOutputWithoutJson() {
+    ScratchTree tree;
+    FakeRunner runner;
+    runner.answer = [](const std::vector<std::string>& argv) {
+        if (hasArg(argv, "outdated")) return updater::CommandResult{0, "Error: something odd\n"};
+        return updater::CommandResult{0, ""};
+    };
+    auto env = fakeEnvironment(tree, {});
+    env.brewPath = "/opt/homebrew/bin/brew";
+    const auto r = updater::checkUpdates(runner.fn(), env, [] { return false; });
+    const auto* brew = statusOf(r, updater::Source::Homebrew);
+    CHECK(brew && !brew->error.empty());
+}
+
+void testRunCommandTimesOutAfterChildClosesOutput() {
+    const auto start = std::chrono::steady_clock::now();
+    const auto r = updater::runCommand({"/bin/sh", "-c", "exec >&- 2>&-; sleep 4"}, 1);
+    CHECK_EQ(r.exitCode, -1);
+    CHECK(std::chrono::steady_clock::now() - start < std::chrono::seconds(3));
+}
+
+void testCheckMarksSkippedSourcesOnCancel() {
+    ScratchTree tree;
+    FakeRunner runner;
+    auto env = fakeEnvironment(tree, {});
+    env.brewPath = "/opt/homebrew/bin/brew";
+    env.portPath = "/opt/local/bin/port";
+    const auto r = updater::checkUpdates(runner.fn(), env, [&] { return !runner.calls.empty(); });
+    const auto* brew = statusOf(r, updater::Source::Homebrew);
+    const auto* store = statusOf(r, updater::Source::AppStore);
+    CHECK(brew && brew->skipped);
+    CHECK(store && store->skipped);
+    const auto full = updater::checkUpdates(runner.fn(), fakeEnvironment(tree, {}), [] { return false; });
+    for (const auto& s : full.sources) CHECK(!s.skipped);
+}
+
+void testCheckSkipsAppStoreAppWithoutShortVersion() {
+    ScratchTree tree;
+    FakeRunner runner;
+    runner.answer = [](const std::vector<std::string>& argv) {
+        if (argv[0] == "/usr/bin/mdls") return updater::CommandResult{0, "111"};
+        if (argv[0] == "/usr/bin/curl") return updater::CommandResult{0, R"({"results":[{"trackId":111,"version":"2.0"}]})"};
+        return updater::CommandResult{0, ""};
+    };
+    const auto env = fakeEnvironment(tree, {{"A.app", {"", "1", ""}}}, {"A.app"});
+    CHECK(updater::checkUpdates(runner.fn(), env, [] { return false; }).items.empty());
+}
+
 int main() {
     testHumanReadableBytes();
 
@@ -2672,6 +3116,32 @@ int main() {
     testLoadXProtectRulesFromFixture();
     testLoadXProtectRulesMissingFile();
 #endif
+    testJsonParsesNested();
+    testJsonEscapes();
+    testJsonRejectsMalformed();
+    testCompareVersions();
+    testBrewOutdatedParsesFormulaeAndCasks();
+    testBrewOutdatedSkipsLeadingNoise();
+    testBrewCaskApps();
+    testPortOutdated();
+    testItunesLookup();
+    testAppcastSkipsChannels();
+    testRunCommandCapturesOutput();
+    testRunCommandTimesOut();
+    testCheckMissingToolsAreNotErrors();
+    testCheckRunsBrewUpdateThenOutdated();
+    testCheckReportsBrewFailureKeepsOthers();
+    testCheckSparkleSkipsCaskAppsAndHttp();
+    testCheckSkipsSparkleWithoutBundleVersion();
+    testCheckAppStoreBatchesLookup();
+    testCheckCancelSkipsRemainingSources();
+    testUpgradeCommand();
+    testCliParsesUpdates();
+    testBrewOutdatedIgnoresTrailingWarning();
+    testCheckReportsBrewOutputWithoutJson();
+    testRunCommandTimesOutAfterChildClosesOutput();
+    testCheckMarksSkippedSourcesOnCancel();
+    testCheckSkipsAppStoreAppWithoutShortVersion();
 
     if (g_failures == 0) {
         std::cout << "All tests passed.\n";

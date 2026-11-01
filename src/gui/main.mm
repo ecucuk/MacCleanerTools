@@ -6,6 +6,7 @@
 
 #import "MCMainWindowController.h"
 #import "MCSettings.h"
+#import "MCSettingsWindowController.h"
 #import "MCSplashWindow.h"
 
 @interface MCAppDelegate : NSObject <NSApplicationDelegate, NSMenuItemValidation>
@@ -63,10 +64,13 @@
 
 #pragma mark Dialogs
 
+- (IBAction)showSettings:(id)sender {
+    [MCSettingsWindowController.shared showTab:@"general"];
+}
+
 // Each dialog lands in its own change; until then its item stays disabled
 // (see validateMenuItem:) rather than doing nothing when clicked.
 - (IBAction)showAbout:(id)sender {}
-- (IBAction)showSettings:(id)sender {}
 - (IBAction)checkForUpdates:(id)sender {}
 - (IBAction)showHelp:(id)sender {}
 - (IBAction)showWelcomeTour:(id)sender {}
@@ -76,7 +80,7 @@
 
 - (BOOL)validateMenuItem:(NSMenuItem *)item {
     const SEL pending[] = {
-        @selector(showAbout:),       @selector(showSettings:),  @selector(checkForUpdates:),
+        @selector(showAbout:),       @selector(checkForUpdates:),
         @selector(showHelp:),        @selector(showWelcomeTour:), @selector(showWhatsNew:),
         @selector(reportIssue:),     @selector(showFullDiskAccess:),
     };

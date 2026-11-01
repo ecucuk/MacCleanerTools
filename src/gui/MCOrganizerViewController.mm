@@ -4,6 +4,7 @@
 
 #import "MCHeroView.h"
 #import "MCOrganizerModel.h"
+#import "MCSettings.h"
 #import "MCTheme.h"
 #import "MCToolBanner.h"
 
@@ -89,6 +90,10 @@ NSTextField *pathLabel(NSString *text) {
                                                               target:self
                                                               action:@selector(viewSwitched:)];
     self.viewSwitch.selectedSegment = 0;
+    [NSNotificationCenter.defaultCenter addObserver:self
+                                           selector:@selector(applyOfflineMode)
+                                               name:MCSettingsDidChangeNotification
+                                             object:nil];
 
     NSStackView *sourceRow = [NSStackView stackViewWithViews:@[
         [NSTextField labelWithString:@"Folder:"], self.sourceLabel, chooseSource
@@ -192,6 +197,7 @@ NSTextField *pathLabel(NSString *text) {
     ]];
 
     [self updateLabels];
+    [self applyOfflineMode];
     [self updateState];
 }
 
@@ -315,6 +321,16 @@ NSTextField *pathLabel(NSString *text) {
     if (self.hasPreview) {
         [self invalidatePreview];
         [self previewOrStop:nil];
+    }
+}
+
+// Map tiles come from Apple: no Map view in offline mode.
+- (void)applyOfflineMode {
+    const BOOL offline = MCSettings.offlineMode;
+    [self.viewSwitch setEnabled:!offline forSegment:1];
+    if (offline && self.viewSwitch.selectedSegment == 1) {
+        self.viewSwitch.selectedSegment = 0;
+        [self viewSwitched:self.viewSwitch];
     }
 }
 

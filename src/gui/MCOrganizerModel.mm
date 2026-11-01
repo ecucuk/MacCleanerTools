@@ -1,5 +1,7 @@
 #import "MCOrganizerModel.h"
 
+#import "MCSettings.h"
+
 #include "maccleaner/organizer.hpp"
 
 #include <atomic>
@@ -141,10 +143,20 @@ NSArray<MCOrganizerGroup *> *groupsFromNode(const Node &node) {
         });
         const auto layout = byPlace ? organizer::PhotoLayout::Place : organizer::PhotoLayout::Content;
         if (byPlace && !self->_cancelled.load()) {
-            organizer::resolvePlaces(files, cacheFile, &self->_cancelled, [&](std::size_t done, std::size_t total) {
-                report([NSString stringWithFormat:@"Looking up places… %lu of %lu", (unsigned long)done,
-                                                  (unsigned long)total]);
-            });
+            // Offline mode: cached places only; the rest stay waiting for a place.
+            const organizer::GeocodeFn geocode =
+                MCSettings.offlineMode
+                    ? organizer::GeocodeFn([](organizer::GeoPoint, organizer::Place&) {
+                          return organizer::GeocodeStatus::Failed;
+                      })
+                    : organizer::GeocodeFn(organizer::reverseGeocode);
+            organizer::resolvePlaces(
+                files, cacheFile, &self->_cancelled,
+                [&](std::size_t done, std::size_t total) {
+                    report([NSString stringWithFormat:@"Looking up places… %lu of %lu", (unsigned long)done,
+                                                      (unsigned long)total]);
+                },
+                geocode);
         }
         if (!self->_cancelled.load()) {
             self->_plan = organizer::planOrganize(

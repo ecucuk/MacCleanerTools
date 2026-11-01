@@ -161,6 +161,12 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
     # Generated from tools/make_icon.m by tools/build_icon.sh and committed,
     # so building the app never needs to run the generator.
     set(MACCLEANER_ICON "${CMAKE_CURRENT_SOURCE_DIR}/resources/MacCleaner.icns")
+    # Listed, not globbed, so a new page re-runs CMake.
+    set(MACCLEANER_HELP_PAGES)
+    foreach(page getting-started storage-cleaner large-files photo-cleaner file-organizer updater uninstaller
+                 performance antivirus safety full-disk-access command-line)
+        list(APPEND MACCLEANER_HELP_PAGES "${CMAKE_CURRENT_SOURCE_DIR}/resources/Help/${page}.html")
+    endforeach()
 
     add_executable(MacCleaner MACOSX_BUNDLE
         src/gui/main.mm
@@ -193,15 +199,21 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
         src/gui/MCUpdateChecker.mm
         src/gui/MCAboutWindowController.mm
         src/gui/MCFullDiskAccess.mm
+        src/gui/MCHelpWindowController.mm
+        src/gui/MCWelcomeWindowController.mm
         "${MACCLEANER_VIZ_HEADER_STAGED}"
         "${MACCLEANER_ICON}"
         "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/WhatsNew.html"
+        ${MACCLEANER_HELP_PAGES}
     )
     # Listing the .icns as a source with a Resources package location is how
     # CMake copies it into MacCleaner.app/Contents/Resources; the plist key
     # below tells Finder and the Dock to use it.
-    set_source_files_properties("${MACCLEANER_ICON}" "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE" PROPERTIES
+    set_source_files_properties("${MACCLEANER_ICON}" "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/WhatsNew.html" PROPERTIES
         MACOSX_PACKAGE_LOCATION Resources)
+    set_source_files_properties(${MACCLEANER_HELP_PAGES} PROPERTIES MACOSX_PACKAGE_LOCATION Resources/Help)
     target_link_libraries(MacCleaner PRIVATE maccleaner_core maccleaner_viz maccleaner_warnings)
     target_include_directories(MacCleaner PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/viz-header")
 

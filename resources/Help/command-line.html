@@ -1,0 +1,10 @@
+<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:-apple-system,Helvetica;font-size:13px;line-height:1.5}h1{font-size:20px}h2{font-size:15px;margin-top:16px}code{font-family:Menlo,monospace;font-size:12px}</style></head><body><h1>Command Line</h1>
+<p>The <code>mac_cleaner</code> command uses the same core as the app.</p>
+<pre><code>mac_cleaner scan
+mac_cleaner clean --apply
+mac_cleaner bigfiles --under=~/Downloads --min=500M
+mac_cleaner uninstall --list
+mac_cleaner check-update
+mac_cleaner --version
+mac_cleaner --help</code></pre><p>Without <code>--apply</code>, every command that removes files is a dry run.</p>
+</body></html>

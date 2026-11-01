@@ -8,11 +8,13 @@
 
 #import "MCAboutWindowController.h"
 #import "MCFullDiskAccess.h"
+#import "MCHelpWindowController.h"
 #import "MCMainWindowController.h"
 #import "MCSettings.h"
 #import "MCSettingsWindowController.h"
 #import "MCSplashWindow.h"
 #import "MCUpdateChecker.h"
+#import "MCWelcomeWindowController.h"
 
 // The new-issue page with the app and macOS versions filled in. Nothing
 // else: no paths, no user name, no tool data.
@@ -32,7 +34,7 @@ static NSURL *issueReportURL(void) {
     return components.URL;
 }
 
-@interface MCAppDelegate : NSObject <NSApplicationDelegate, NSMenuItemValidation>
+@interface MCAppDelegate : NSObject <NSApplicationDelegate>
 @property(nonatomic, strong) MCMainWindowController *windowController;
 @property(nonatomic, strong) MCSplashWindow *splash;
 @property(nonatomic, strong) NSMenu *viewMenu;
@@ -59,6 +61,10 @@ static NSURL *issueReportURL(void) {
     [self.windowController.window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
 
+    // After the splash, which floats above the main window for 0.6 s.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [MCWelcomeWindowController.shared showAtLaunchIfNeeded];
+    });
     // After the splash and any welcome window, so the dialogs do not stack.
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
         [MCUpdateChecker.shared checkAutomaticallyIfDue];
@@ -112,22 +118,16 @@ static NSURL *issueReportURL(void) {
     [MCSettingsWindowController.shared showTab:@"general"];
 }
 
-// Each dialog lands in its own change; until then its item stays disabled
-// (see validateMenuItem:) rather than doing nothing when clicked.
-- (IBAction)showHelp:(id)sender {}
-- (IBAction)showWelcomeTour:(id)sender {}
-- (IBAction)showWhatsNew:(id)sender {}
+- (IBAction)showHelp:(id)sender {
+    [MCHelpWindowController.shared showTopic:nil];
+}
 
-- (BOOL)validateMenuItem:(NSMenuItem *)item {
-    const SEL pending[] = {
-        @selector(showHelp:), @selector(showWelcomeTour:), @selector(showWhatsNew:),
-    };
-    for (SEL action : pending) {
-        if (item.action == action) {
-            return NO;
-        }
-    }
-    return YES;
+- (IBAction)showWelcomeTour:(id)sender {
+    [MCWelcomeWindowController.shared showTour];
+}
+
+- (IBAction)showWhatsNew:(id)sender {
+    [MCWelcomeWindowController.shared showWhatsNew];
 }
 
 @end

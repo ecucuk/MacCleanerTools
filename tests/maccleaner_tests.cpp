@@ -2896,6 +2896,27 @@ void testUpgradeCommand() {
     CHECK(runner.calls.size() == 1 && runner.calls[0] == updater::upgradeCommand(env, cask));
 }
 
+void testCliParsesUninstallList() {
+    maccleaner::CliParseError error;
+    const char* argv[] = {"mac_cleaner", "uninstall", "--list"};
+    const auto parsed = maccleaner::parseArgs(3, const_cast<char**>(argv), error);
+    CHECK(parsed.has_value() && parsed->command == maccleaner::Command::Uninstall && parsed->listApps);
+}
+
+void testCliParsesUninstallTarget() {
+    maccleaner::CliParseError error;
+    const char* argv[] = {"mac_cleaner", "uninstall", "Foo", "--apply"};
+    const auto parsed = maccleaner::parseArgs(4, const_cast<char**>(argv), error);
+    CHECK(parsed.has_value() && parsed->paths == (std::vector<std::string>{"Foo"}) && parsed->apply &&
+          !parsed->listApps);
+}
+
+void testCliUninstallNeedsTarget() {
+    maccleaner::CliParseError error;
+    const char* argv[] = {"mac_cleaner", "uninstall"};
+    CHECK(!maccleaner::parseArgs(2, const_cast<char**>(argv), error).has_value());
+}
+
 void testCliParsesUpdates() {
     using maccleaner::Command;
     using maccleaner::parseArgs;
@@ -3428,6 +3449,9 @@ int main() {
     testCheckCancelSkipsRemainingSources();
     testUpgradeCommand();
     testCliParsesUpdates();
+    testCliParsesUninstallList();
+    testCliParsesUninstallTarget();
+    testCliUninstallNeedsTarget();
     testBrewOutdatedIgnoresTrailingWarning();
     testCheckReportsBrewOutputWithoutJson();
     testRunCommandTimesOutAfterChildClosesOutput();

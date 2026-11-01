@@ -20,6 +20,7 @@ enum class Command {
     Organize,   // sort a folder into Photos/Videos/Music/Documents/Other (--apply moves)
     Malware,    // scan for malware signatures and suspicious persistence (--trash remediates)
     Updates,    // list outdated software; --upgrade <name>... upgrades brew items
+    Uninstall,  // --list apps, or report/trash one app and its leftovers (--apply)
     Help,
 };
 
@@ -51,6 +52,8 @@ struct CliOptions {
     std::vector<std::string> paths;
     // updates options: brew items to upgrade (empty = list only).
     std::vector<std::string> upgradeNames;
+    // uninstall options: the target is paths[0]; --apply moves it to the Trash.
+    bool listApps = false;
 };
 
 struct CliParseError {

@@ -92,7 +92,8 @@ static NSURL *issueReportURL(void) {
 }
 
 - (void)selectToolFromMenu:(NSMenuItem *)sender {
-    [self.windowController selectToolAtIndex:sender.tag];
+    // Through showTool: so the sidebar selection follows.
+    [self.windowController showTool:[self.windowController toolAtIndex:sender.tag]];
     [self.windowController showWindow:nil];
 }
 

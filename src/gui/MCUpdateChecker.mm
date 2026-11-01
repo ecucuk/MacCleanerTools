@@ -37,6 +37,8 @@ constexpr double kTimeoutSeconds = 10;
 @interface MCUpdateChecker ()
 @property(nonatomic, strong) dispatch_queue_t queue;
 @property(nonatomic) BOOL running;
+/// A manual check that arrived while another fetch ran: report that fetch.
+@property(nonatomic) BOOL manualPending;
 @end
 
 @implementation MCUpdateChecker
@@ -62,6 +64,10 @@ constexpr double kTimeoutSeconds = 10;
         }
         return;
     }
+    if (self.running) {
+        self.manualPending = YES; // the running fetch reports when it ends
+        return;
+    }
     [self fetchThen:^(MCUpdateOutcome *outcome) {
         [self report:outcome];
     }];
@@ -84,7 +90,7 @@ constexpr double kTimeoutSeconds = 10;
 
 - (void)fetchThen:(void (^)(MCUpdateOutcome *))completion {
     if (self.running) {
-        return; // one request at a time
+        return; // one request at a time; checkManually sets manualPending
     }
     self.running = YES;
     NSString *current = MCSettings.appVersion;
@@ -117,7 +123,12 @@ constexpr double kTimeoutSeconds = 10;
             if (outcome.succeeded) {
                 MCSettings.lastUpdateCheck = [NSDate date];
             }
-            completion(outcome);
+            if (self.manualPending) {
+                self.manualPending = NO;
+                [self report:outcome];
+            } else {
+                completion(outcome);
+            }
         });
     });
 }

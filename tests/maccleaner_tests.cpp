@@ -3136,6 +3136,40 @@ void testUninstallerUnrelatedFilesUntouched() {
     CHECK(!hasPath(r, f.lib / "Application Support/Foobar"));
 }
 
+void testUninstallSafetyAcceptsBundle() {
+    ScratchTree tree;
+    const fs::path apps = tree.root() / "apps";
+    writeFileOfSize(apps / "Foo.app/Contents/MacOS/foo", 1);
+    std::string reason;
+    CHECK(maccleaner::safety::isSafeToUninstall(apps / "Foo.app", {apps}, &reason));
+}
+
+void testUninstallSafetyRejects() {
+    ScratchTree tree;
+    const fs::path apps = tree.root() / "apps";
+    writeFileOfSize(apps / "Foo.app/Contents/MacOS/foo", 1);
+    fs::create_directories(apps / "Foo.app/Contents/Helper.app");
+    writeFileOfSize(apps / "notes.txt", 1);
+    writeFileOfSize(tree.outside() / "Foo.app/Contents/MacOS/foo", 1);
+    std::error_code ec;
+    fs::create_directory_symlink(apps / "Foo.app", apps / "Link.app", ec);
+    const std::vector<fs::path> folders{apps};
+    for (const fs::path& p : {apps, apps / "Foo.app/Contents", apps / "Foo.app/Contents/Helper.app",
+                              apps / "notes.txt", apps / "Link.app", tree.outside() / "Foo.app",
+                              apps / "Missing.app"}) {
+        std::string reason;
+        CHECK(!maccleaner::safety::isSafeToUninstall(p, folders, &reason));
+        CHECK(!reason.empty());
+    }
+}
+
+void testUninstallSafetyKeepsHardDenylist() {
+    const char* home = std::getenv("HOME");
+    AllowedRoots allowed;
+    allowed.add(fs::path(home != nullptr ? home : "/") / "Library/Caches");
+    CHECK(!isSafeToDelete("/Applications/Foo.app", allowed, nullptr));
+}
+
 int main() {
     testHumanReadableBytes();
 
@@ -3316,6 +3350,9 @@ int main() {
     testUninstallerLaunchAgentByProgram();
     testUninstallerSystemLibraryNeedsAdmin();
     testUninstallerUnrelatedFilesUntouched();
+    testUninstallSafetyAcceptsBundle();
+    testUninstallSafetyRejects();
+    testUninstallSafetyKeepsHardDenylist();
 
     if (g_failures == 0) {
         std::cout << "All tests passed.\n";

@@ -55,4 +55,13 @@ bool isSafeToDelete(const std::filesystem::path& candidate,
 // candidates are expected to live *underneath* it.
 const std::vector<std::filesystem::path>& hardDenylist();
 
+// Narrow allowance for the Uninstaller: true only for an app bundle, i.e. a
+// real (non-symlink) directory named *.app, owned by the current user, whose
+// parent is one of `appFolders` (/Applications, ~/Applications in
+// production). /Applications stays in hardDenylist; this does not relax
+// isSafeToDelete.
+bool isSafeToUninstall(const std::filesystem::path& appBundle,
+                       const std::vector<std::filesystem::path>& appFolders,
+                       std::string* reasonIfUnsafe = nullptr);
+
 } // namespace maccleaner::safety

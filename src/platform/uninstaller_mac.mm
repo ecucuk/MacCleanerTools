@@ -8,7 +8,6 @@
 #include <cstdlib>
 #include <filesystem>
 
-#include "maccleaner/scanner.hpp"
 
 namespace maccleaner::uninstaller {
 
@@ -53,7 +52,6 @@ Environment defaultEnvironment() {
             info.version = stringValue(bundle, CFSTR("CFBundleShortVersionString"));
             CFRelease(bundle);
             if (info.name.empty()) info.name = std::filesystem::path(appPath).stem().string();
-            info.sizeBytes = directorySizeBytes(appPath);
 
             SecStaticCodeRef code = nullptr;
             if (SecStaticCodeCreateWithPath((__bridge CFURLRef)url, kSecCSDefaultFlags, &code) == errSecSuccess) {

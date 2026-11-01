@@ -20,7 +20,7 @@ struct AppInfo {
     std::string teamId;        // from the code signature, "" if unsigned or ad hoc
     std::vector<std::string> appGroups; // com.apple.security.application-groups
     bool appleSigned = false;  // signed by Apple (anchor apple)
-    std::uint64_t sizeBytes = 0;
+    std::uint64_t sizeBytes = 0; // 0 from listApps; the caller fills it lazily (directorySizeBytes)
 };
 
 enum class LeftoverKind { AppBundle, Support, Cache, Preferences, Container,

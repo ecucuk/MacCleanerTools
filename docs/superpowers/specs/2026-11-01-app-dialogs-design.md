@@ -234,7 +234,9 @@ app only opens the browser and makes no request itself.
   Paste (⌘V) · Select All (⌘A) · separator · Find (⌘F, focuses the search
   field of the current tool when it has one).
 - **View:** Home (⌘0) · one item per tool (⌘1…⌘9 in sidebar order) ·
-  separator · Toggle Sidebar (⌃⌘S) · Enter Full Screen (⌃⌘F).
+  separator · Enter Full Screen (⌃⌘F). There is no Toggle Sidebar item:
+  the sidebar cannot collapse by design, because a collapsed sidebar
+  strands the user in the current tool.
 - **Window:** unchanged (Close, Minimize) plus Zoom and Bring All to Front.
 - **Help:** MacCleaner Help (⌘?) · Welcome Tour · What's New · separator ·
   Report an Issue… · separator · Full Disk Access….

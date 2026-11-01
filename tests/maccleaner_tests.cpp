@@ -15,6 +15,7 @@
 #include "maccleaner/malware.hpp"
 #include "maccleaner/safety.hpp"
 #include "maccleaner/scanner.hpp"
+#include "maccleaner/selfupdate.hpp"
 #include "maccleaner/walk.hpp"
 #include "maccleaner/updater.hpp"
 #include "maccleaner/uninstaller.hpp"
@@ -3338,6 +3339,40 @@ void testUninstallSafetyKeepsHardDenylist() {
     CHECK(!isSafeToDelete("/Applications/Foo.app", allowed, nullptr));
 }
 
+void testSelfUpdateParsesRelease() {
+    using namespace maccleaner::selfupdate;
+    const auto r = parseLatestRelease(R"({"tag_name":"v0.2.0","name":"MacCleaner 0.2","body":"- Fix\n- Add","html_url":"https://github.com/ecucuk/MacCleanerTools/releases/tag/v0.2.0","draft":false})");
+    CHECK(r.has_value());
+    CHECK_EQ(r->version, std::string("0.2.0"));
+    CHECK_EQ(r->name, std::string("MacCleaner 0.2"));
+    CHECK_EQ(r->notes, std::string("- Fix\n- Add"));
+    CHECK_EQ(r->pageUrl, std::string("https://github.com/ecucuk/MacCleanerTools/releases/tag/v0.2.0"));
+    const auto upper = parseLatestRelease(R"({"tag_name":"V1.0","html_url":"https://github.com/x/y/releases/tag/V1.0"})");
+    CHECK(upper.has_value());
+    CHECK_EQ(upper->version, std::string("1.0"));
+    CHECK_EQ(upper->name, std::string("V1.0")); // no "name": falls back to the tag
+}
+
+void testSelfUpdateRejectsBadRelease() {
+    using namespace maccleaner::selfupdate;
+    CHECK(!parseLatestRelease(R"({"html_url":"https://github.com/x/y"})").has_value());              // no tag
+    CHECK(!parseLatestRelease("<html>rate limited</html>").has_value());                             // not JSON
+    CHECK(!parseLatestRelease(R"({"tag_name":"v1","html_url":"https://evil.example/x"})").has_value());
+    CHECK(!parseLatestRelease(R"({"tag_name":"v1","html_url":"http://github.com/x"})").has_value()); // not https
+    CHECK(!parseLatestRelease(R"({"tag_name":"v1"})").has_value());                                  // no url
+}
+
+void testSelfUpdateIsNewer() {
+    using maccleaner::selfupdate::isNewer;
+    CHECK(isNewer("0.2.0", "0.1.0"));
+    CHECK(!isNewer("v0.1.0", "0.1.0"));
+    CHECK(!isNewer("0.1.0", "v0.1.0"));
+    CHECK(isNewer("0.1.10", "0.1.9"));
+    CHECK(!isNewer("1.0.0-beta.1", "1.0.0"));
+    CHECK(isNewer("1.0.0", "1.0.0-beta.1"));
+    CHECK(!isNewer("0.1.0", "0.2.0"));
+}
+
 int main() {
     testHumanReadableBytes();
 
@@ -3533,6 +3568,9 @@ int main() {
     testUninstallSafetyAcceptsBundle();
     testUninstallSafetyRejects();
     testUninstallSafetyKeepsHardDenylist();
+    testSelfUpdateParsesRelease();
+    testSelfUpdateRejectsBadRelease();
+    testSelfUpdateIsNewer();
 
     if (g_failures == 0) {
         std::cout << "All tests passed.\n";

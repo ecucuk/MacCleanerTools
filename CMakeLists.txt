@@ -53,6 +53,7 @@ set(MACCLEANER_CORE_SOURCES
     src/json.cpp
     src/updater.cpp
     src/uninstaller.cpp
+    src/selfupdate.cpp
 )
 
 set(MACCLEANER_APPLE_SOURCES)

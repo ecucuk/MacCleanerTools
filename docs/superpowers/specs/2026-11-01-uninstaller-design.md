@@ -84,6 +84,7 @@ struct Environment {
     std::vector<std::string> appFolders;   // /Applications, ~/Applications
     std::string home;
     std::function<std::optional<AppInfo>(const std::string& appPath)> readApp;
+    std::function<bool(const std::string& path)> ownedByUser; // lstat st_uid == geteuid()
 };
 Environment defaultEnvironment();
 ```

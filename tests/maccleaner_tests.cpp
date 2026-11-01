@@ -423,6 +423,7 @@ using maccleaner::CleanOptions;
 using maccleaner::CleanReport;
 using maccleaner::DeleteMode;
 using maccleaner::requiresPermanentDelete;
+using maccleaner::isRecommendedForAutoClean;
 
 ScanResult scanForCleaning(const ScratchTree& tree) {
     ScanTarget target{Category::UserCaches, "test", tree.root(), {}};
@@ -485,6 +486,18 @@ void testTrashCategoryForcesPermanentDelete() {
     CHECK(requiresPermanentDelete(Category::Trash));
     CHECK(!requiresPermanentDelete(Category::UserCaches));
     CHECK(!requiresPermanentDelete(Category::XcodeDerivedData));
+}
+
+void testRecommendedForAutoClean() {
+    // Smart Optimize pre-selects only what the owners regenerate on their own.
+    for (Category c : {Category::UserCaches, Category::UserLogs, Category::DiagnosticReports,
+                       Category::XcodeDerivedData, Category::SimulatorCaches, Category::HomebrewCache,
+                       Category::NpmCache, Category::YarnCache, Category::PipCache}) {
+        CHECK(isRecommendedForAutoClean(c));
+    }
+    for (Category c : {Category::XcodeArchives, Category::XcodeDeviceSupport, Category::Trash}) {
+        CHECK(!isRecommendedForAutoClean(c));
+    }
 }
 
 // --- CLI ----------------------------------------------------------------
@@ -3409,6 +3422,7 @@ int main() {
     testCleanSkipsUnsafeEntriesWithReason();
     testCleanPermanentRemovesEntries();
     testTrashCategoryForcesPermanentDelete();
+    testRecommendedForAutoClean();
 
     testBigFilesFindsAndSortsAboveThreshold();
     testBigFilesHonoursTopCap();

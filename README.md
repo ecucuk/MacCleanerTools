@@ -53,6 +53,26 @@ ctest --test-dir build --output-on-failure
 Both front ends build by default; pass `-DMACCLEANER_BUILD_GUI=OFF` to skip
 the app (and build headless / on non-Apple platforms).
 
+The app and the CLI run on macOS 14 or later (`CMAKE_OSX_DEPLOYMENT_TARGET`,
+default `14.0`). Without that setting the compiler targets the build
+machine's macOS, and the binaries would refuse to launch on older systems.
+
+### Release packages
+
+```sh
+sh tools/make_release.sh            # writes build/release/
+```
+
+The script builds an arm64 and an x86_64 tree (Swift compiles one
+architecture per build), runs the tests on both (the Intel ones under
+Rosetta), merges the executables with `lipo`, signs ad hoc, and writes
+`MacCleaner-<version>.zip`, `.dmg` (drag to Applications), `.pkg` (installs
+the app in `/Applications` and `mac_cleaner` in `/usr/local/bin`),
+`mac_cleaner-<version>.zip` and `SHA256SUMS`. Run it on an Apple silicon
+Mac. There is no Developer ID signature or notarization, so Gatekeeper asks
+the user to approve the first launch (System Settings › Privacy & Security
+› Open Anyway).
+
 ### Installing
 
 The build produces a self-contained `build/MacCleaner.app`; copy it to

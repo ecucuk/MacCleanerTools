@@ -69,6 +69,8 @@ void printUsage() {
         "  mac_cleaner updates [--upgrade <name>...]\n"
         "  mac_cleaner uninstall --list\n"
         "  mac_cleaner uninstall <name|bundle-id|path> [--apply]\n"
+        "  mac_cleaner check-update\n"
+        "  mac_cleaner --version\n"
         "\n"
         "Commands:\n"
         "  scan       Report what would be cleaned and how much space it would free (default).\n"
@@ -86,6 +88,7 @@ void printUsage() {
         "             suspicious LaunchAgents/LaunchDaemons. Reports only; not a real-time AV.\n"
         "  uninstall  List installed third-party apps (--list), or show an app and its\n"
         "             leftovers. Without --apply it is a dry run; --apply moves them to Trash.\n"
+        "  check-update  Ask GitHub whether a newer MacCleaner release exists.\n"
         "  updates    List outdated Homebrew, MacPorts, App Store and Sparkle software\n"
         "             (runs brew update and fetches App Store and appcast versions).\n"
         "\n"
@@ -139,6 +142,14 @@ std::optional<CliOptions> parseArgs(int argc, char** argv, CliParseError& error)
     std::vector<std::string_view> args(argv + (argc > 0 ? 1 : 0), argv + argc);
 
     std::size_t index = 0;
+    if (!args.empty() && args[0] == "check-update") {
+        if (args.size() > 1 && args[1] != "--help" && args[1] != "-h") {
+            error.message = "check-update takes no arguments";
+            return std::nullopt;
+        }
+        options.command = args.size() > 1 ? Command::Help : Command::CheckUpdate;
+        return options;
+    }
     if (!args.empty() && (args[0] == "scan" || args[0] == "clean" || args[0] == "bigfiles" ||
                           args[0] == "processes" || args[0] == "optimize" || args[0] == "photos" ||
                           args[0] == "organize" || args[0] == "malware" || args[0] == "updates" ||
@@ -161,6 +172,9 @@ std::optional<CliOptions> parseArgs(int argc, char** argv, CliParseError& error)
 
         if (arg == "--help" || arg == "-h") {
             options.command = Command::Help;
+            return options;
+        } else if (arg == "--version") {
+            options.command = Command::Version;
             return options;
         } else if (arg == "--apply") {
             options.apply = true;

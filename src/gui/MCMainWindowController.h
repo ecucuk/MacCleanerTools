@@ -7,10 +7,19 @@
 
 #import <AppKit/AppKit.h>
 
+#import "MCTheme.h"
+
 NS_ASSUME_NONNULL_BEGIN
 
 @interface MCMainWindowController : NSWindowController
 - (instancetype)init;
+/// Sidebar titles and tools, in sidebar order (the View menu mirrors them).
+- (NSArray<NSString *> *)toolTitles;
+- (MCTool)toolAtIndex:(NSInteger)index;
+- (void)selectToolAtIndex:(NSInteger)index;
+- (void)showTool:(MCTool)tool;
+/// ⌘F: forwarded to the current tool when it has a search field.
+- (IBAction)focusSearchField:(nullable id)sender;
 @end
 
 NS_ASSUME_NONNULL_END

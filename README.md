@@ -106,6 +106,8 @@ build/mac_cleaner uninstall com.example.app --apply   # move them to the Trash
 build/mac_cleaner malware                        # scan ~/Downloads, ~/Desktop, ~/Applications, /Applications
 build/mac_cleaner malware --path=~/Projects      # scan another folder instead (repeatable)
 build/mac_cleaner malware --trash                # then move Detected/Suspicious items to the Trash
+build/mac_cleaner check-update                   # is a newer MacCleaner release on GitHub?
+build/mac_cleaner --version
 ```
 
 ## Usage — GUI
@@ -120,6 +122,31 @@ delays launch.
 
 The sidebar on the left switches tools; each tool is a self-contained view
 controller over the shared core (see Extending).
+
+### Menus, settings and help
+
+- **MacCleaner › Settings** (⌘,) has four tabs. **General**: the splash
+  screen, the tool that opens at launch (Home or the last used tool), and
+  the automatic update check. **Cleaning**: the default Large Files size
+  and whether Optimize selects idle helpers. Storage Cleaner always starts
+  in Trash mode. **Appearance**: System, Light or Dark. **Privacy**:
+  offline mode.
+- **Offline mode** stops every network request: Check for Updates, the
+  Updater tool, the Uninstaller's `brew info` read, and File Organizer's
+  place lookups and map (places already in its cache still apply).
+- **Check for Updates…** asks the GitHub Releases API for the latest
+  release and offers Download (the release page), Later or Skip This
+  Version. MacCleaner never downloads or installs anything itself. The
+  automatic check runs at most once a day and speaks only when a new
+  version exists.
+- **View** has one item per tool: ⌘0 for Home, ⌘1… in sidebar order.
+  **Edit** gives the search fields copy, paste and ⌘F.
+- **Help** opens MacCleaner Help (⌘?, bundled pages that work offline),
+  the welcome tour, What's New, Report an Issue (a GitHub issue with only
+  the app and macOS versions filled in) and the Full Disk Access guide.
+  The tour shows on the first launch; What's New shows once after each
+  version change. When a removal fails because macOS denied access (TCC),
+  the Full Disk Access guide offers itself once per launch.
 
 **Home** is where the app opens: one card per tool, with a cheap live
 summary that refreshes each time Home appears — reclaimable cache size
@@ -552,11 +579,12 @@ allowlist-first rather than denylist-first:
 
 ```text
 include/maccleaner/   public headers (types, safety, scanner, cleaner, trash, cli, format,
-                      updater, json)
+                      updater, json, selfupdate, http)
 src/                  core implementation + CLI front end (main.cpp)
 src/platform/         OS-specific backends: Trash, images, organizer moves,
                       malware_mac.mm (Security, CommonCrypto, XProtect.plist) and
-                      updater_mac.mm (CFBundle Info.plist reads, locale region)
+                      updater_mac.mm (CFBundle Info.plist reads, locale region),
+                      http_mac.mm (ephemeral NSURLSession GET)
 src/gui/              AppKit front end: MCMainWindowController = sidebar shell,
                       MCHomeViewController = Home hub, MCSplashWindow = splash,
                       MCCleanerViewController / MCLargeFilesViewController /
@@ -568,9 +596,14 @@ src/gui/              AppKit front end: MCMainWindowController = sidebar shell,
                       MCPhotoModel / MCOrganizerModel / MCMalwareModel /
                       MCUpdaterModel / MCUninstallerModel =
                       core wrappers + threading,
-                      main.mm = NSApplication
+                      MCSettings = the one owner of NSUserDefaults,
+                      MCSettingsWindowController / MCAboutWindowController /
+                      MCWelcomeWindowController / MCHelpWindowController /
+                      MCUpdateChecker / MCFullDiskAccess = app dialogs,
+                      main.mm = NSApplication and the menu bar
 src/gui/viz/          SwiftUI Activity window (own static lib, bridged via
                       the generated MacCleanerViz-Swift.h)
+resources/            app icon, WhatsNew.html, Help/*.html
 cmake/                bundle Info.plist template
 tests/                dependency-free CTest suite
 ```

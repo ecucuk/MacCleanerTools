@@ -21,6 +21,8 @@ enum class Command {
     Malware,    // scan for malware signatures and suspicious persistence (--trash remediates)
     Updates,    // list outdated software; --upgrade <name>... upgrades brew items
     Uninstall,  // --list apps, or report/trash one app and its leftovers (--apply)
+    Version,    // print the version
+    CheckUpdate, // ask GitHub for a newer MacCleaner release
     Help,
 };
 

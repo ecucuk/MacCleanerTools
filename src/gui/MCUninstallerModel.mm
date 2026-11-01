@@ -1,5 +1,7 @@
 #import "MCUninstallerModel.h"
 
+#import "MCSettings.h"
+
 #include "maccleaner/scanner.hpp"
 #include "maccleaner/uninstaller.hpp"
 #include "maccleaner/updater.hpp"
@@ -156,7 +158,9 @@ bool trashKeepingErrno(const fs::path &path, std::string &error) {
         // Read the installed casks once per tool session, right after the list,
         // so the first review rarely waits for brew.
         const std::string brew = updater::defaultEnvironment().brewPath;
-        if (!brew.empty() && !self->_brewRead) {
+        // Offline mode: brew info may fetch its API index, so skip it and
+        // leave _brewRead false to read once offline mode goes off.
+        if (!brew.empty() && !self->_brewRead && !MCSettings.offlineMode) {
             self->_brewRead = true;
             const auto info = updater::runCommand({brew, "info", "--cask", "--json=v2", "--installed"}, 60);
             if (info.exitCode == 0) {

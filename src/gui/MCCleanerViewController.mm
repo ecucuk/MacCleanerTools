@@ -1,5 +1,6 @@
 #import "MCCleanerViewController.h"
 
+#import "MCFullDiskAccess.h"
 #import "MCHeroView.h"
 #import "MCScanModel.h"
 #import "MCTheme.h"
@@ -427,7 +428,17 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
     }
 
     [alert addButtonWithTitle:@"OK"];
-    [alert beginSheetModalForWindow:self.view.window completionHandler:nil];
+    BOOL accessDenied = NO;
+    for (NSString *problem in summary.problems) {
+        accessDenied = accessDenied || [MCFullDiskAccess isAccessError:problem];
+    }
+    NSWindow *window = self.view.window;
+    [alert beginSheetModalForWindow:window
+                  completionHandler:^(NSModalResponse) {
+                      if (accessDenied) {
+                          [MCFullDiskAccess presentIfNeededForWindow:window];
+                      }
+                  }];
 }
 
 #pragma mark - State

@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(mac_cleaner
-    VERSION 0.1.0
+    VERSION 1.0.0
     DESCRIPTION "macOS disk cleanup / storage optimization tool"
     LANGUAGES CXX)
 
@@ -53,6 +53,7 @@ set(MACCLEANER_CORE_SOURCES
     src/json.cpp
     src/updater.cpp
     src/uninstaller.cpp
+    src/selfupdate.cpp
 )
 
 set(MACCLEANER_APPLE_SOURCES)
@@ -63,10 +64,10 @@ else()
 endif()
 if(APPLE)
     list(APPEND MACCLEANER_APPLE_SOURCES src/platform/image_mac.mm src/platform/organizer_mac.mm
-        src/platform/malware_mac.mm src/platform/updater_mac.mm src/platform/uninstaller_mac.mm)
+        src/platform/malware_mac.mm src/platform/updater_mac.mm src/platform/uninstaller_mac.mm src/platform/http_mac.mm)
 else()
     list(APPEND MACCLEANER_APPLE_SOURCES src/platform/image_fallback.cpp src/platform/organizer_fallback.cpp
-        src/platform/malware_fallback.cpp src/platform/updater_fallback.cpp src/platform/uninstaller_fallback.cpp)
+        src/platform/malware_fallback.cpp src/platform/updater_fallback.cpp src/platform/uninstaller_fallback.cpp src/platform/http_fallback.cpp)
 endif()
 
 add_library(maccleaner_core STATIC
@@ -79,6 +80,7 @@ target_include_directories(maccleaner_core PUBLIC
 target_link_libraries(maccleaner_core PRIVATE maccleaner_warnings)
 target_compile_definitions(maccleaner_core PUBLIC
     MACCLEANER_NATIVE_TRASH=$<BOOL:$<AND:$<BOOL:${APPLE}>,$<BOOL:${MACCLEANER_USE_NATIVE_TRASH}>>>
+    MACCLEANER_VERSION="${PROJECT_VERSION}"
 )
 
 if(APPLE AND MACCLEANER_USE_NATIVE_TRASH)
@@ -103,7 +105,7 @@ if(APPLE)
         ${FOUNDATION_FRAMEWORK} ${IMAGEIO_FRAMEWORK} ${COREGRAPHICS_FRAMEWORK} ${IOKIT_FRAMEWORK}
         ${AVFOUNDATION_FRAMEWORK} ${VISION_FRAMEWORK} ${MAPKIT_FRAMEWORK} ${CORELOCATION_FRAMEWORK} ${SECURITY_FRAMEWORK})
     set_source_files_properties(src/platform/image_mac.mm src/platform/organizer_mac.mm src/platform/malware_mac.mm
-        src/platform/updater_mac.mm src/platform/uninstaller_mac.mm PROPERTIES
+        src/platform/updater_mac.mm src/platform/uninstaller_mac.mm src/platform/http_mac.mm PROPERTIES
         COMPILE_FLAGS "-fobjc-arc"
     )
 endif()
@@ -159,6 +161,12 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
     # Generated from tools/make_icon.m by tools/build_icon.sh and committed,
     # so building the app never needs to run the generator.
     set(MACCLEANER_ICON "${CMAKE_CURRENT_SOURCE_DIR}/resources/MacCleaner.icns")
+    # Listed, not globbed, so a new page re-runs CMake.
+    set(MACCLEANER_HELP_PAGES)
+    foreach(page getting-started storage-cleaner large-files photo-cleaner file-organizer updater uninstaller
+                 performance antivirus safety full-disk-access command-line)
+        list(APPEND MACCLEANER_HELP_PAGES "${CMAKE_CURRENT_SOURCE_DIR}/resources/Help/${page}.html")
+    endforeach()
 
     add_executable(MacCleaner MACOSX_BUNDLE
         src/gui/main.mm
@@ -186,14 +194,26 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
         src/gui/MCTheme.mm
         src/gui/MCHeroView.mm
         src/gui/MCToolBanner.mm
+        src/gui/MCSettings.mm
+        src/gui/MCSettingsWindowController.mm
+        src/gui/MCUpdateChecker.mm
+        src/gui/MCAboutWindowController.mm
+        src/gui/MCFullDiskAccess.mm
+        src/gui/MCHelpWindowController.mm
+        src/gui/MCWelcomeWindowController.mm
         "${MACCLEANER_VIZ_HEADER_STAGED}"
         "${MACCLEANER_ICON}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/WhatsNew.html"
+        ${MACCLEANER_HELP_PAGES}
     )
     # Listing the .icns as a source with a Resources package location is how
     # CMake copies it into MacCleaner.app/Contents/Resources; the plist key
     # below tells Finder and the Dock to use it.
-    set_source_files_properties("${MACCLEANER_ICON}" PROPERTIES
+    set_source_files_properties("${MACCLEANER_ICON}" "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
+        "${CMAKE_CURRENT_SOURCE_DIR}/resources/WhatsNew.html" PROPERTIES
         MACOSX_PACKAGE_LOCATION Resources)
+    set_source_files_properties(${MACCLEANER_HELP_PAGES} PROPERTIES MACOSX_PACKAGE_LOCATION Resources/Help)
     target_link_libraries(MacCleaner PRIVATE maccleaner_core maccleaner_viz maccleaner_warnings)
     target_include_directories(MacCleaner PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/viz-header")
 

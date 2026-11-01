@@ -1,6 +1,7 @@
 #import "MCUpdaterViewController.h"
 
 #import "MCHeroView.h"
+#import "MCSettings.h"
 #import "MCTheme.h"
 #import "MCToolBanner.h"
 #import "MCUpdaterModel.h"
@@ -53,6 +54,7 @@ NSString *stateText(MCUpdateItem *item) {
 @property(nonatomic, strong) NSTextField *statusLabel;
 @property(nonatomic, strong) NSButton *checkButton;
 @property(nonatomic, strong) NSButton *updateButton;
+@property(nonatomic, strong) NSButton *heroCheckButton;
 @end
 
 @implementation MCUpdaterViewController
@@ -114,8 +116,13 @@ NSString *stateText(MCUpdateItem *item) {
                                           symbol:kSymbol
                                            title:@"Updater"
                                         subtitle:@"Find outdated Homebrew, MacPorts, App Store and Sparkle apps."];
-    self.hero.actions = @[ [MCGlassButton buttonWithTitle:@"Check" style:MCGlassButtonStyleRound tool:MCToolUpdater
-                                                   target:self action:@selector(check:)] ];
+    self.heroCheckButton = [MCGlassButton buttonWithTitle:@"Check" style:MCGlassButtonStyleRound tool:MCToolUpdater
+                                                   target:self action:@selector(check:)];
+    self.hero.actions = @[ self.heroCheckButton ];
+    [NSNotificationCenter.defaultCenter addObserver:self
+                                           selector:@selector(updateState)
+                                               name:MCSettingsDidChangeNotification
+                                             object:nil];
     self.hero.scanningAccessory = [MCGlassButton buttonWithTitle:@"Stop" style:MCGlassButtonStylePill
                                                             tool:MCToolUpdater target:self action:@selector(stop:)];
 
@@ -172,9 +179,19 @@ NSString *stateText(MCUpdateItem *item) {
     self.banner.caption = pending == 1 ? @"update available" : @"updates available";
     // While a check runs, Check Again turns into its Stop.
     self.checkButton.title = busy && !self.upgrading ? @"Stop" : @"Check Again";
-    self.checkButton.enabled = !self.upgrading;
+    // Offline mode: nothing may start a check or an upgrade (both use the
+    // network); a running one can still be stopped.
+    const BOOL offline = MCSettings.offlineMode;
+    self.checkButton.enabled = !self.upgrading && (busy || !offline);
+    self.heroCheckButton.enabled = !offline;
     self.updateButton.title = self.upgrading ? @"Stop" : @"Update Selected";
-    self.updateButton.enabled = self.upgrading || (!busy && self.selectedItems.count > 0);
+    self.updateButton.enabled = self.upgrading || (!busy && !offline && self.selectedItems.count > 0);
+    NSString *const offlineText = @"Offline mode is on — Settings › Privacy";
+    if (offline && !busy) {
+        self.statusLabel.stringValue = offlineText;
+    } else if ([self.statusLabel.stringValue isEqualToString:offlineText]) {
+        self.statusLabel.stringValue = @"";
+    }
 
     const BOOL presented = !self.hasChecked;
     [self.hero setPresented:presented];
@@ -183,6 +200,8 @@ NSString *stateText(MCUpdateItem *item) {
     }
     if (busy) {
         [self.hero showScanningWithStatus:@"Checking Homebrew, the App Store and app feeds…"];
+    } else if (offline) {
+        [self.hero showIdleWithMessage:@"Offline mode is on — Settings › Privacy"];
     } else {
         [self.hero showIdleWithMessage:@"Runs brew update and asks the App Store and app feeds for versions"];
     }
@@ -209,6 +228,9 @@ NSString *stateText(MCUpdateItem *item) {
         if (!self.upgrading) {
             [self.model cancel];
         }
+        return;
+    }
+    if (MCSettings.offlineMode) {
         return;
     }
     self.statusLabel.stringValue = @"Checking…";
@@ -248,7 +270,7 @@ NSString *stateText(MCUpdateItem *item) {
         return;
     }
     NSArray<MCUpdateItem *> *items = self.selectedItems;
-    if (items.count == 0) {
+    if (items.count == 0 || MCSettings.offlineMode) {
         return;
     }
     self.upgrading = YES;

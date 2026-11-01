@@ -52,6 +52,7 @@ set(MACCLEANER_CORE_SOURCES
     src/malware.cpp
     src/json.cpp
     src/updater.cpp
+    src/uninstaller.cpp
 )
 
 set(MACCLEANER_APPLE_SOURCES)

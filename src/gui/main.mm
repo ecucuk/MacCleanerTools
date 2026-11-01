@@ -8,6 +8,7 @@
 #import "MCSettings.h"
 #import "MCSettingsWindowController.h"
 #import "MCSplashWindow.h"
+#import "MCUpdateChecker.h"
 
 @interface MCAppDelegate : NSObject <NSApplicationDelegate, NSMenuItemValidation>
 @property(nonatomic, strong) MCMainWindowController *windowController;
@@ -35,6 +36,11 @@
     [self.windowController showWindow:nil];
     [self.windowController.window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
+
+    // After the splash and any welcome window, so the dialogs do not stack.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        [MCUpdateChecker.shared checkAutomaticallyIfDue];
+    });
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {
@@ -64,6 +70,10 @@
 
 #pragma mark Dialogs
 
+- (IBAction)checkForUpdates:(id)sender {
+    [MCUpdateChecker.shared checkManually];
+}
+
 - (IBAction)showSettings:(id)sender {
     [MCSettingsWindowController.shared showTab:@"general"];
 }
@@ -71,7 +81,6 @@
 // Each dialog lands in its own change; until then its item stays disabled
 // (see validateMenuItem:) rather than doing nothing when clicked.
 - (IBAction)showAbout:(id)sender {}
-- (IBAction)checkForUpdates:(id)sender {}
 - (IBAction)showHelp:(id)sender {}
 - (IBAction)showWelcomeTour:(id)sender {}
 - (IBAction)showWhatsNew:(id)sender {}
@@ -80,7 +89,7 @@
 
 - (BOOL)validateMenuItem:(NSMenuItem *)item {
     const SEL pending[] = {
-        @selector(showAbout:),       @selector(checkForUpdates:),
+        @selector(showAbout:),
         @selector(showHelp:),        @selector(showWelcomeTour:), @selector(showWhatsNew:),
         @selector(reportIssue:),     @selector(showFullDiskAccess:),
     };

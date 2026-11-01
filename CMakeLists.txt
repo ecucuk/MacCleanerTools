@@ -190,6 +190,7 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
         src/gui/MCToolBanner.mm
         src/gui/MCSettings.mm
         src/gui/MCSettingsWindowController.mm
+        src/gui/MCUpdateChecker.mm
         "${MACCLEANER_VIZ_HEADER_STAGED}"
         "${MACCLEANER_ICON}"
     )

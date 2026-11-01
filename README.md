@@ -100,7 +100,7 @@ build/mac_cleaner updates                        # outdated software from every 
 build/mac_cleaner updates --upgrade wget firefox # upgrade these Homebrew items
 build/mac_cleaner optimize                       # report reclaimable processes
 build/mac_cleaner optimize --apply               # and terminate them (SIGTERM)
-build/mac_cleaner uninstall --list               # installed apps (no Apple apps)
+build/mac_cleaner uninstall --list               # installed apps (none bundled with macOS)
 build/mac_cleaner uninstall MCTestApp            # dry run: the app and its leftovers
 build/mac_cleaner uninstall com.example.app --apply   # move them to the Trash
 build/mac_cleaner malware                        # scan ~/Downloads, ~/Desktop, ~/Applications, /Applications
@@ -298,14 +298,16 @@ Finder. A trashed launch agent that is already running stops at the next
 login.
 
 **Uninstaller** lists the apps in `/Applications` and `~/Applications`
-(Apple apps and MacCleaner itself are left out). Click an app to review the
+(apps bundled with macOS and MacCleaner itself are left out). Click an app to review the
 app bundle and its leftovers, then **Uninstall**. Everything goes to the
 Trash, so you can put it back. It never deletes for good.
 
 - **What it matches.** The bundle ID, taken from the app itself, and the
-  exact app name. A name matches only when it is equal to the bundle ID, starts with
-  `<bundle-id>.`, or (in Application Support and Logs) equals the app name.
-  Matching is case-insensitive and never a substring, so an app named
+  exact app name. A name matches when it equals the bundle ID or starts with
+  `<bundle-id>.`. In Application Support and Logs, it also matches when it
+  equals the app name. Leftovers of another installed app with a more
+  specific bundle ID (`com.google.Chrome.canary` for `com.google.Chrome`), and
+  app groups shared with other installed apps, are not offered. Matching is case-insensitive and never a substring, so an app named
   "Code" does not match "Xcode". The places are `Application Support`,
   `Caches`, `Preferences`, `Containers`, `Group Containers`,
   `Saved Application State`, `Logs`, `HTTPStorages`, `WebKit`, `Cookies` and
@@ -322,6 +324,8 @@ Trash, so you can put it back. It never deletes for good.
 - **Limits.** It does not look for leftovers of apps that are already
   deleted. It does not stop a running launch agent: a trashed plist stops
   loading at the next login.
+- **CLI target.** `uninstall <target>` looks for an exact app path first,
+  then a bundle ID, then an app name (both case-insensitive).
 - **CLI exit codes.** 2 when the app is not found or the name is ambiguous,
   1 when the app is running or any item failed, 0 otherwise.
 

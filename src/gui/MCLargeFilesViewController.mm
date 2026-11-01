@@ -2,6 +2,7 @@
 
 #import "MCBigFilesModel.h"
 #import "MCHeroView.h"
+#import "MCSettings.h"
 #import "MCTheme.h"
 #import "MCToolBanner.h"
 
@@ -24,20 +25,11 @@ NSString *const kSizeColumn = @"size";
 NSString *const kNameColumn = @"name";
 NSString *const kPathColumn = @"path";
 
-// Threshold popup entries. Bytes are 1024-based to match humanSize output.
-struct ThresholdChoice {
-    const char *label;
-    unsigned long long bytes;
-};
-constexpr ThresholdChoice kThresholds[] = {
-    {"50 MB", 50ull << 20},
-    {"100 MB", 100ull << 20},
-    {"250 MB", 250ull << 20},
-    {"500 MB", 500ull << 20},
-    {"1 GB", 1ull << 30},
-    {"5 GB", 5ull << 30},
-};
-constexpr NSInteger kDefaultThresholdIndex = 1; // 100 MB
+// Threshold popup entries come from MCSettings.largeFilesChoicesMB; bytes
+// are 1024-based to match humanSize output.
+NSString *thresholdText(NSInteger megabytes) {
+    return [[MCSettings labelForMegabytes:megabytes] stringByReplacingOccurrencesOfString:@"≥ " withString:@""];
+}
 constexpr NSUInteger kMaxResults = 200;
 
 } // namespace
@@ -77,6 +69,7 @@ constexpr NSUInteger kMaxResults = 200;
 
 @property(nonatomic, strong) NSTextField *rootLabel;
 @property(nonatomic, strong) NSPopUpButton *thresholdPopUp;
+@property(nonatomic) NSInteger appliedDefaultMB; // the Settings default last put in the popup
 @property(nonatomic, strong) NSButton *chooseButton;
 @property(nonatomic, strong) NSButton *scanButton;
 @property(nonatomic, strong) NSProgressIndicator *spinner;
@@ -131,10 +124,16 @@ constexpr NSUInteger kMaxResults = 200;
     self.chooseButton.bezelStyle = NSBezelStyleRounded;
 
     self.thresholdPopUp = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
-    for (const auto &choice : kThresholds) {
-        [self.thresholdPopUp addItemWithTitle:[NSString stringWithFormat:@"≥ %s", choice.label]];
+    for (NSNumber *megabytes in MCSettings.largeFilesChoicesMB) {
+        [self.thresholdPopUp addItemWithTitle:[MCSettings labelForMegabytes:megabytes.integerValue]];
+        self.thresholdPopUp.lastItem.tag = megabytes.integerValue;
     }
-    [self.thresholdPopUp selectItemAtIndex:kDefaultThresholdIndex];
+    self.appliedDefaultMB = MCSettings.largeFilesMinSizeMB;
+    [self.thresholdPopUp selectItemWithTag:self.appliedDefaultMB];
+    [NSNotificationCenter.defaultCenter addObserver:self
+                                           selector:@selector(settingsDidChange:)
+                                               name:MCSettingsDidChangeNotification
+                                             object:nil];
 
     self.scanButton = [MCGlassButton buttonWithTitle:@"Scan" style:MCGlassButtonStylePillPrimary
                                                 tool:MCToolLargeFiles target:self action:@selector(scanOrCancel:)];
@@ -337,16 +336,34 @@ constexpr NSUInteger kMaxResults = 200;
 /// The start screen until a scan shows its first row. After a finished
 /// scan the results stay, even when empty, so the threshold and folder
 /// controls are at hand for the next try.
+- (NSInteger)selectedMegabytes {
+    const NSInteger tag = self.thresholdPopUp.selectedTag;
+    return tag > 0 ? tag : MCSettings.largeFilesMinSizeMB;
+}
+
+// A new default in Settings applies at once, but never under a running scan.
+// Other settings changes (every tool switch writes one) must not undo a
+// threshold the user picked here, so act only when the default itself moved.
+- (void)settingsDidChange:(NSNotification *)note {
+    const NSInteger stored = MCSettings.largeFilesMinSizeMB;
+    if (stored == self.appliedDefaultMB || self.model.scanning) {
+        return;
+    }
+    self.appliedDefaultMB = stored;
+    [self.thresholdPopUp selectItemWithTag:stored];
+    [self updateHero];
+}
+
 - (void)updateHero {
     unsigned long long total = 0;
     for (MCBigFileItem *item in self.items) {
         total += item.sizeBytes;
     }
-    const NSInteger thresholdIndex = MAX(self.thresholdPopUp.indexOfSelectedItem, 0);
+    NSString *threshold = thresholdText(self.selectedMegabytes);
     NSString *root = [self displayPath:self.scanRoot != nil ? self.scanRoot : self.pendingRoot];
     self.banner.value = humanSize(total);
-    self.banner.caption = [NSString stringWithFormat:@"in %lu file(s) of %s or more · %@", (unsigned long)self.items.count,
-                                                     kThresholds[thresholdIndex].label, root];
+    self.banner.caption = [NSString stringWithFormat:@"in %lu file(s) of %@ or more · %@", (unsigned long)self.items.count,
+                                                     threshold, root];
 
     const BOOL presented = self.items.count == 0 && (self.model.scanning || !self.hasScanned);
     [self.hero setPresented:presented];
@@ -356,8 +373,8 @@ constexpr NSUInteger kMaxResults = 200;
     if (self.model.scanning) {
         [self.hero showScanningWithStatus:@"Walking the folder for large files…"];
     } else {
-        [self.hero showIdleWithMessage:[NSString stringWithFormat:@"Searches %@ for files of %s or more", root,
-                                                                  kThresholds[thresholdIndex].label]];
+        [self.hero showIdleWithMessage:[NSString stringWithFormat:@"Searches %@ for files of %@ or more", root,
+                                                                  threshold]];
     }
 }
 
@@ -402,9 +419,7 @@ constexpr NSUInteger kMaxResults = 200;
         return;
     }
 
-    const NSInteger thresholdIndex = self.thresholdPopUp.indexOfSelectedItem;
-    const unsigned long long minSize =
-        kThresholds[MAX(thresholdIndex, 0)].bytes;
+    const unsigned long long minSize = (unsigned long long)self.selectedMegabytes << 20;
 
     NSString *root = self.pendingRoot;
     self.scanButton.title = @"Cancel";

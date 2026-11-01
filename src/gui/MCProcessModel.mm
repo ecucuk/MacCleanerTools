@@ -1,5 +1,7 @@
 #import "MCProcessModel.h"
 
+#import "MCSettings.h"
+
 #include "maccleaner/optimizer.hpp"
 #include "maccleaner/processes.hpp"
 
@@ -79,8 +81,9 @@ std::uint64_t nowNs() {
         _recommended = candidate.recommended;
         // Recommended proposals start accepted; the opt-in ones (a live
         // helper whose content would reload) start unchecked, so nothing
-        // with a visible cost happens unless the user asks for it.
-        _selected = candidate.recommended;
+        // with a visible cost happens unless the user asks for it (or turned
+        // that default on in Settings › Cleaning).
+        _selected = candidate.recommended || MCSettings.idleHelperRuleDefault;
     }
     return self;
 }

@@ -9,6 +9,7 @@
 #import "MCUninstallerViewController.h"
 #import "MCUpdaterViewController.h"
 #import "MCPhotosViewController.h"
+#import "MCSettings.h"
 #import "MCTheme.h"
 
 #pragma mark - Tool registry
@@ -145,6 +146,9 @@
     window.titleVisibility = NSWindowTitleHidden;
     [window center];
 
+    // Read before the sidebar loads: its first automatic selection records
+    // Home as the last tool.
+    const MCTool lastTool = MCSettings.lastTool;
     if ((self = [super initWithWindow:window])) {
         window.delegate = self;
         MCToolEntry *cleaner = [[MCToolEntry alloc] init];
@@ -234,8 +238,32 @@
         window.contentViewController = split;
 
         [self selectToolAtIndex:0];
+        if (MCSettings.launchTool == MCLaunchToolLastUsed) {
+            [self showTool:lastTool]; // no-op for a tool that no longer exists
+        }
     }
     return self;
+}
+
+- (NSArray<NSString *> *)toolTitles {
+    return [self.tools valueForKey:@"title"];
+}
+
+- (MCTool)toolAtIndex:(NSInteger)index {
+    return self.tools[(NSUInteger)index].tool;
+}
+
+- (void)focusSearchField:(id)sender {
+    if ([self.currentTool respondsToSelector:@selector(focusSearchField:)]) {
+        [(id)self.currentTool focusSearchField:sender];
+    }
+}
+
+- (BOOL)validateMenuItem:(NSMenuItem *)item {
+    if (item.action == @selector(focusSearchField:)) {
+        return [self.currentTool respondsToSelector:@selector(focusSearchField:)];
+    }
+    return YES;
 }
 
 - (void)showTool:(MCTool)tool {
@@ -299,6 +327,7 @@
     ]];
 
     self.window.title = tool.title; // hidden, but the Window menu lists it
+    MCSettings.lastTool = tool.tool;
 }
 
 @end

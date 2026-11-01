@@ -239,6 +239,13 @@ NSScrollView *cardFor(NSTableView *table) {
         }];
 }
 
+// ⌘F, forwarded by the main window.
+- (void)focusSearchField:(id)sender {
+    if (!self.searchField.hidden) {
+        [self.view.window makeFirstResponder:self.searchField];
+    }
+}
+
 - (void)search:(id)sender {
     [self applySearch];
 }

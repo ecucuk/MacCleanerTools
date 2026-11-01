@@ -2993,7 +2993,7 @@ struct UninstallFixture {
         env.appFolders = {apps.string()};
         env.home = home.string();
         env.systemLibrary = sys.string();
-        env.readApp = [this](const std::string& path) -> std::optional<un::AppInfo> {
+        env.readApp = [](const std::string& path) -> std::optional<un::AppInfo> {
             un::AppInfo a;
             a.path = path;
             const std::string file = fs::path(path).filename().string();

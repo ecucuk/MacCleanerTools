@@ -16,7 +16,9 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <iostream>
 #include <map>
@@ -531,8 +533,8 @@ int runUninstall(const CliOptions& options) {
         const auto info = updater::runCommand({brewEnv.brewPath, "info", "--cask", "--json=v2", "--installed"}, 60);
         const std::string bundleName = std::filesystem::path(app.path).filename().string();
         if (info.exitCode == 0 && updater::parseBrewCaskApps(info.output).count(bundleName) > 0) {
-            std::cout << "Installed with Homebrew. Run `brew uninstall --cask <token>` too, "
-                         "or Homebrew will think it is still installed.\n";
+            std::cout << "Installed with Homebrew. Also remove it with `brew uninstall --cask` "
+                         "(see `brew list --cask`), or Homebrew will think it is still installed.\n";
         }
     }
 

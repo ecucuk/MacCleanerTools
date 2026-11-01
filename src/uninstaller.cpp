@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
+#include <cstring>
 #include <filesystem>
 
 #include "maccleaner/processes.hpp"
@@ -200,8 +202,12 @@ std::vector<RemovalResult> uninstall(const Environment& env, const AppInfo& app,
     const auto remove = [&](const Leftover& row) {
         RemovalResult r{row.path, false, {}};
         struct stat st {};
-        if (::lstat(row.path.c_str(), &st) != 0) { // already gone counts as done
-            r.ok = true;
+        if (::lstat(row.path.c_str(), &st) != 0) {
+            if (errno == ENOENT || errno == ENOTDIR) { // already gone counts as done
+                r.ok = true;
+            } else {
+                r.error = std::strerror(errno); // EACCES/EPERM: cannot tell, not a success
+            }
             return r;
         }
         const bool bundle = row.kind == LeftoverKind::AppBundle;

@@ -27,6 +27,11 @@ std::string cfString(CFTypeRef v) {
     return s.UTF8String ? s.UTF8String : "";
 }
 
+std::string utf8(id s) {
+    const char* c = [s UTF8String];
+    return c != nullptr ? c : "";
+}
+
 } // namespace
 
 Environment defaultEnvironment() {
@@ -61,14 +66,14 @@ Environment defaultEnvironment() {
                                                                 CFSTR("com.apple.security.application-groups"));
                         if (groups != nullptr && CFGetTypeID(groups) == CFArrayGetTypeID()) {
                             for (id g in (__bridge NSArray*)groups)
-                                if ([g isKindOfClass:NSString.class]) info.appGroups.emplace_back([g UTF8String]);
+                                if ([g isKindOfClass:NSString.class]) info.appGroups.push_back(utf8(g));
                         }
                     }
                     CFRelease(sig);
                 }
                 SecRequirementRef req = nullptr;
                 if (SecRequirementCreateWithString(CFSTR("anchor apple"), kSecCSDefaultFlags, &req) == errSecSuccess) {
-                    info.appleSigned = SecStaticCodeCheckValidity(code, kSecCSDefaultFlags, req) == errSecSuccess;
+                    info.appleSigned = SecStaticCodeCheckValidity(code, kSecCSDoNotValidateResources, req) == errSecSuccess;
                     CFRelease(req);
                 }
                 CFRelease(code);
@@ -91,12 +96,12 @@ Environment defaultEnvironment() {
             if (![obj isKindOfClass:NSDictionary.class]) return std::nullopt;
             NSDictionary* d = obj;
             LaunchAgentInfo info;
-            if ([d[@"Label"] isKindOfClass:NSString.class]) info.label = [d[@"Label"] UTF8String];
+            if ([d[@"Label"] isKindOfClass:NSString.class]) info.label = utf8(d[@"Label"]);
             if ([d[@"Program"] isKindOfClass:NSString.class]) {
-                info.program = [d[@"Program"] UTF8String];
+                info.program = utf8(d[@"Program"]);
             } else if ([d[@"ProgramArguments"] isKindOfClass:NSArray.class]) {
                 NSArray* a = d[@"ProgramArguments"];
-                if (a.count > 0 && [a[0] isKindOfClass:NSString.class]) info.program = [a[0] UTF8String];
+                if (a.count > 0 && [a[0] isKindOfClass:NSString.class]) info.program = utf8(a[0]);
             }
             return info;
         }

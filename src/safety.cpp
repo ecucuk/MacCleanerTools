@@ -184,4 +184,47 @@ bool isSafeToDelete(const fs::path& candidate, const AllowedRoots& allowed, std:
     return true;
 }
 
+bool isSafeToUninstall(const fs::path& appBundle, const std::vector<fs::path>& appFolders,
+                       std::string* reasonIfUnsafe) {
+    auto reject = [&](const std::string& reason) {
+        if (reasonIfUnsafe != nullptr) {
+            *reasonIfUnsafe = reason;
+        }
+        return false;
+    };
+
+    struct stat lst {};
+    if (::lstat(appBundle.c_str(), &lst) != 0) {
+        return reject("cannot stat path (" + appBundle.string() + ")");
+    }
+    if (S_ISLNK(lst.st_mode)) {
+        return reject("refusing to uninstall a symlink: " + appBundle.string());
+    }
+    if (!S_ISDIR(lst.st_mode)) {
+        return reject("not a directory: " + appBundle.string());
+    }
+    std::string extension = appBundle.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (extension != ".app") {
+        return reject("not an app bundle (*.app): " + appBundle.string());
+    }
+    if (lst.st_uid != ::geteuid()) {
+        return reject("bundle is not owned by the current user: " + appBundle.string());
+    }
+
+    std::error_code ec;
+    const fs::path parent = fs::weakly_canonical(appBundle.parent_path(), ec);
+    if (ec) {
+        return reject("failed to resolve path: " + ec.message());
+    }
+    for (const fs::path& folder : appFolders) {
+        std::error_code fec;
+        if (fs::weakly_canonical(folder, fec) == parent && !fec) {
+            return true;
+        }
+    }
+    return reject("not a direct child of an applications folder: " + appBundle.string());
+}
+
 } // namespace maccleaner::safety

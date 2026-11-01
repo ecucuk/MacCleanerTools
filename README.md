@@ -21,6 +21,9 @@ behind one sidebar:
 - **Performance** — a live view of your processes by CPU, memory and
   uptime, with heavy consumers flagged, guarded Quit / Force Quit, and a
   one-click **Optimize** that finds processes worth reclaiming.
+- **Uninstaller** — pick an installed app and move it, with the files it left
+  in your Library, to the Trash. Matching is exact; nothing is deleted for
+  good.
 - **Antivirus** — an on-demand scan of Downloads, Desktop and Applications
   for Apple's XProtect signatures, quarantined unsigned programs and
   suspicious LaunchAgents/LaunchDaemons. Report-only until you move a
@@ -97,6 +100,9 @@ build/mac_cleaner updates                        # outdated software from every 
 build/mac_cleaner updates --upgrade wget firefox # upgrade these Homebrew items
 build/mac_cleaner optimize                       # report reclaimable processes
 build/mac_cleaner optimize --apply               # and terminate them (SIGTERM)
+build/mac_cleaner uninstall --list               # installed apps (none bundled with macOS)
+build/mac_cleaner uninstall MCTestApp            # dry run: the app and its leftovers
+build/mac_cleaner uninstall com.example.app --apply   # move them to the Trash
 build/mac_cleaner malware                        # scan ~/Downloads, ~/Desktop, ~/Applications, /Applications
 build/mac_cleaner malware --path=~/Projects      # scan another folder instead (repeatable)
 build/mac_cleaner malware --trash                # then move Detected/Suspicious items to the Trash
@@ -290,6 +296,38 @@ launch-agent folders as the allowed roots. Items in `/Applications` or
 `/Library` therefore stay put: they need an administrator, so remove them in
 Finder. A trashed launch agent that is already running stops at the next
 login.
+
+**Uninstaller** lists the apps in `/Applications` and `~/Applications`
+(apps bundled with macOS and MacCleaner itself are left out). Click an app to review the
+app bundle and its leftovers, then **Uninstall**. Everything goes to the
+Trash, so you can put it back. It never deletes for good.
+
+- **What it matches.** The bundle ID, taken from the app itself, and the
+  exact app name. A name matches when it equals the bundle ID or starts with
+  `<bundle-id>.`. In Application Support and Logs, it also matches when it
+  equals the app name. Leftovers of another installed app with a more
+  specific bundle ID (`com.google.Chrome.canary` for `com.google.Chrome`), and
+  app groups shared with other installed apps, are not offered. Matching is case-insensitive and never a substring, so an app named
+  "Code" does not match "Xcode". The places are `Application Support`,
+  `Caches`, `Preferences`, `Containers`, `Group Containers`,
+  `Saved Application State`, `Logs`, `HTTPStorages`, `WebKit`, `Cookies` and
+  `LaunchAgents` under `~/Library`. A LaunchAgent matches by its file name,
+  its `Label`, or a `Program` inside the app bundle.
+- **Needs admin.** Matches in `/Library` (daemons, helper tools, caches) and
+  root-owned apps from a `.pkg` are listed as "Needs admin". They are never
+  removed and the tool never asks for a password. Remove them in Finder.
+- **Running apps.** Quit the app first. The GUI offers to quit it; the CLI
+  refuses with exit code 1.
+- **Homebrew.** For a cask app, the tool shows a note: also run
+  `brew uninstall --cask`, or Homebrew will think the app is still
+  installed. It reads `brew info` only and never runs an uninstall.
+- **Limits.** It does not look for leftovers of apps that are already
+  deleted. It does not stop a running launch agent: a trashed plist stops
+  loading at the next login.
+- **CLI target.** `uninstall <target>` looks for an exact app path first,
+  then a bundle ID, then an app name (both case-insensitive).
+- **CLI exit codes.** 2 when the app is not found or the name is ambiguous,
+  1 when the app is running or any item failed, 0 otherwise.
 
 ### Optimize
 
@@ -524,11 +562,11 @@ src/gui/              AppKit front end: MCMainWindowController = sidebar shell,
                       MCCleanerViewController / MCLargeFilesViewController /
                       MCPerformanceViewController / MCPhotosViewController /
                       MCOrganizerViewController / MCAntivirusViewController /
-                      MCUpdaterViewController = tools,
+                      MCUpdaterViewController / MCUninstallerViewController = tools,
                       MCOptimizeSheetController = the Optimize review sheet,
                       MCScanModel / MCBigFilesModel / MCProcessModel /
                       MCPhotoModel / MCOrganizerModel / MCMalwareModel /
-                      MCUpdaterModel =
+                      MCUpdaterModel / MCUninstallerModel =
                       core wrappers + threading,
                       main.mm = NSApplication
 src/gui/viz/          SwiftUI Activity window (own static lib, bridged via

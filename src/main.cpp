@@ -10,12 +10,15 @@
 #include "maccleaner/safety.hpp"
 #include "maccleaner/scanner.hpp"
 #include "maccleaner/trash.hpp"
+#include "maccleaner/uninstaller.hpp"
 #include "maccleaner/updater.hpp"
 
 #include <unistd.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <iostream>
 #include <map>
@@ -464,6 +467,106 @@ int runMalware(const CliOptions& options) {
     return failures == 0 ? 0 : 1;
 }
 
+std::string lowerAscii(std::string text) {
+    std::transform(text.begin(), text.end(), text.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return text;
+}
+
+int runUninstall(const CliOptions& options) {
+    namespace un = maccleaner::uninstaller;
+    const un::Environment env = un::defaultEnvironment();
+    const std::vector<un::AppInfo> apps = un::listApps(env);
+
+    if (options.listApps) {
+        for (const auto& app : apps) {
+            std::cout << app.name << "  " << app.version << "  " << app.bundleId << "  " << app.path << "\n";
+        }
+        std::cout << apps.size() << " app(s)\n";
+        return 0;
+    }
+
+    // Exact path, then bundle ID, then full name; the first rule that hits wins.
+    const std::string target = options.paths.front();
+    const std::string key = lowerAscii(target);
+    std::vector<const un::AppInfo*> matches;
+    for (const auto& pick : {0, 1, 2}) {
+        for (const auto& app : apps) {
+            const bool hit = pick == 0   ? app.path == target
+                             : pick == 1 ? lowerAscii(app.bundleId) == key
+                                         : lowerAscii(app.name) == key;
+            if (hit) matches.push_back(&app);
+        }
+        if (!matches.empty()) break;
+    }
+    if (matches.empty()) {
+        std::cerr << "error: no installed third-party app matches '" << target << "' (see: uninstall --list)\n";
+        return 2;
+    }
+    if (matches.size() > 1) {
+        std::cerr << "error: '" << target << "' is ambiguous; use the bundle ID or path:\n";
+        for (const auto* app : matches) {
+            std::cerr << "  " << app->name << "  " << app->bundleId << "  " << app->path << "\n";
+        }
+        return 2;
+    }
+    const un::AppInfo& app = *matches.front();
+    const std::vector<un::Leftover> leftovers = un::findLeftovers(env, app, apps);
+
+    std::uint64_t total = 0;
+    std::vector<un::Leftover> selected;
+    std::cout << app.name << " " << app.version << " (" << app.bundleId << ")\n";
+    for (const auto& item : leftovers) {
+        std::cout << "  " << un::toString(item.kind) << "  " << humanReadableBytes(item.sizeBytes) << "  " << item.path;
+        if (item.needsAdmin) {
+            std::cout << "  [needs admin]";
+        } else {
+            total += item.sizeBytes;
+            selected.push_back(item);
+        }
+        std::cout << "\n";
+    }
+    std::cout << "Total (removable): " << humanReadableBytes(total) << "\n";
+
+    const updater::Environment brewEnv = updater::defaultEnvironment();
+    if (!brewEnv.brewPath.empty()) {
+        const auto info = updater::runCommand({brewEnv.brewPath, "info", "--cask", "--json=v2", "--installed"}, 60);
+        const std::string bundleName = std::filesystem::path(app.path).filename().string();
+        if (info.exitCode == 0 && updater::parseBrewCaskApps(info.output).count(bundleName) > 0) {
+            std::cout << "Installed with Homebrew. Also remove it with `brew uninstall --cask` "
+                         "(see `brew list --cask`), or Homebrew will think it is still installed.\n";
+        }
+    }
+
+    if (!options.apply) {
+        std::cout << "Dry run. Pass --apply to move these items to the Trash.\n";
+        return 0;
+    }
+    if (un::isAppRunning(app.path)) {
+        std::cerr << "Quit " << app.name << " first\n";
+        return 1;
+    }
+    std::string refusal;
+    const auto results = un::uninstall(
+        env, app, selected,
+        [](const std::filesystem::path& path, std::string& error) { return trash::moveToTrash(path, error); },
+        un::isAppRunning, &refusal);
+    if (!refusal.empty()) {
+        std::cerr << "error: " << refusal << "\n";
+        return 1;
+    }
+    int failures = 0;
+    for (const auto& result : results) {
+        if (result.ok) {
+            std::cout << "TRASHED " << result.path << "\n";
+        } else {
+            std::cout << "FAILED  " << result.path << "  (" << result.error << ")\n";
+            ++failures;
+        }
+    }
+    return failures == 0 ? 0 : 1;
+}
+
 int runUpdates(const CliOptions& options) {
     using namespace maccleaner::updater;
     Environment env = defaultEnvironment();
@@ -582,6 +685,8 @@ int main(int argc, char** argv) {
             return runMalware(options);
         case Command::Updates:
             return runUpdates(options);
+        case Command::Uninstall:
+            return runUninstall(options);
     }
     return 0;
 }

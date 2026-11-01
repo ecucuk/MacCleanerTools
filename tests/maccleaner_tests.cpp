@@ -17,6 +17,7 @@
 #include "maccleaner/scanner.hpp"
 #include "maccleaner/walk.hpp"
 #include "maccleaner/updater.hpp"
+#include "maccleaner/uninstaller.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -2895,6 +2896,27 @@ void testUpgradeCommand() {
     CHECK(runner.calls.size() == 1 && runner.calls[0] == updater::upgradeCommand(env, cask));
 }
 
+void testCliParsesUninstallList() {
+    maccleaner::CliParseError error;
+    const char* argv[] = {"mac_cleaner", "uninstall", "--list"};
+    const auto parsed = maccleaner::parseArgs(3, const_cast<char**>(argv), error);
+    CHECK(parsed.has_value() && parsed->command == maccleaner::Command::Uninstall && parsed->listApps);
+}
+
+void testCliParsesUninstallTarget() {
+    maccleaner::CliParseError error;
+    const char* argv[] = {"mac_cleaner", "uninstall", "Foo", "--apply"};
+    const auto parsed = maccleaner::parseArgs(4, const_cast<char**>(argv), error);
+    CHECK(parsed.has_value() && parsed->paths == (std::vector<std::string>{"Foo"}) && parsed->apply &&
+          !parsed->listApps);
+}
+
+void testCliUninstallNeedsTarget() {
+    maccleaner::CliParseError error;
+    const char* argv[] = {"mac_cleaner", "uninstall"};
+    CHECK(!maccleaner::parseArgs(2, const_cast<char**>(argv), error).has_value());
+}
+
 void testCliParsesUpdates() {
     using maccleaner::Command;
     using maccleaner::parseArgs;
@@ -2967,6 +2989,353 @@ void testCheckSkipsAppStoreAppWithoutShortVersion() {
     };
     const auto env = fakeEnvironment(tree, {{"A.app", {"", "1", ""}}}, {"A.app"});
     CHECK(updater::checkUpdates(runner.fn(), env, [] { return false; }).items.empty());
+}
+
+// --- Uninstaller -------------------------------------------------------------
+
+namespace un = maccleaner::uninstaller;
+
+struct UninstallFixture {
+    ScratchTree tree;
+    fs::path apps, home, lib, sys;
+    std::set<std::string> notOwned;
+    std::map<std::string, un::LaunchAgentInfo> agents;
+    un::Environment env;
+
+    UninstallFixture() {
+        apps = tree.root() / "Applications";
+        home = tree.root() / "home";
+        lib = home / "Library";
+        sys = tree.root() / "syslib";
+        for (const char* n : {"Foo", "Bar", "Apple", "NoId", "Self"}) fs::create_directories(apps / (std::string(n) + ".app"));
+        fs::create_directory_symlink(apps / "Foo.app", apps / "link.app");
+        fs::create_directories(lib);
+        fs::create_directories(sys);
+        env.appFolders = {apps.string()};
+        env.home = home.string();
+        env.systemLibrary = sys.string();
+        env.readApp = [](const std::string& path) -> std::optional<un::AppInfo> {
+            un::AppInfo a;
+            a.path = path;
+            const std::string file = fs::path(path).filename().string();
+            if (file == "Foo.app" || file == "link.app") {
+                a.name = "Foo"; a.bundleId = "com.foo.app"; a.teamId = "TEAM1"; a.appGroups = {"group.com.foo"};
+            } else if (file == "Bar.app") {
+                a.name = "Bar"; a.bundleId = "com.bar.app";
+            } else if (file == "Apple.app") {
+                a.name = "Apple"; a.bundleId = "com.apple.thing"; a.appleSigned = true;
+            } else if (file == "NoId.app") {
+                a.name = "NoId";
+            } else if (file == "Self.app") {
+                a.name = "Self"; a.bundleId = un::kSelfBundleId;
+            } else {
+                return std::nullopt;
+            }
+            return a;
+        };
+        env.ownedByUser = [this](const std::string& path) { return notOwned.count(path) == 0; };
+        env.readLaunchAgent = [this](const std::string& path) -> std::optional<un::LaunchAgentInfo> {
+            auto it = agents.find(path);
+            if (it == agents.end()) return std::nullopt;
+            return it->second;
+        };
+    }
+
+    un::AppInfo foo() const { return *env.readApp((apps / "Foo.app").string()); }
+    void touch(const fs::path& p) {
+        fs::create_directories(p.parent_path());
+        std::ofstream(p) << "data";
+    }
+};
+
+bool hasLeftover(const std::vector<un::Leftover>& v, const fs::path& p, un::LeftoverKind k) {
+    for (const auto& l : v)
+        if (l.path == p.string() && l.kind == k) return true;
+    return false;
+}
+
+bool hasPath(const std::vector<un::Leftover>& v, const fs::path& p) {
+    for (const auto& l : v)
+        if (l.path == p.string()) return true;
+    return false;
+}
+
+void testUninstallerMatchesIdRule() {
+    CHECK(un::matchesId("com.foo.app.helper", "com.foo.app"));
+    CHECK(!un::matchesId("com.foo.appbaz", "com.foo.app"));
+    CHECK(un::matchesId("COM.FOO.APP", "com.foo.app"));
+}
+
+void testUninstallerListAppsFilters() {
+    UninstallFixture f;
+    auto apps = un::listApps(f.env);
+    CHECK_EQ(apps.size(), 2u);
+    if (apps.size() == 2) {
+        CHECK_EQ(apps[0].name, std::string("Bar"));
+        CHECK_EQ(apps[1].name, std::string("Foo"));
+    }
+}
+
+void testUninstallerFindsEachLocation() {
+    using K = un::LeftoverKind;
+    UninstallFixture f;
+    const fs::path& L = f.lib;
+    const std::vector<std::pair<fs::path, K>> expected = {
+        {L / "Application Support/Foo", K::Support},
+        {L / "Application Support/com.foo.app", K::Support},
+        {L / "Caches/com.foo.app", K::Cache},
+        {L / "Preferences/com.foo.app.plist", K::Preferences},
+        {L / "Preferences/ByHost/com.foo.app.ABC.plist", K::Preferences},
+        {L / "Containers/com.foo.app", K::Container},
+        {L / "Group Containers/group.com.foo", K::GroupContainer},
+        {L / "Group Containers/TEAM1.com.foo.app", K::GroupContainer},
+        {L / "Saved Application State/com.foo.app.savedState", K::SavedState},
+        {L / "Logs/Foo", K::Logs},
+        {L / "HTTPStorages/com.foo.app", K::HTTPStorage},
+        {L / "WebKit/com.foo.app", K::WebKit},
+        {L / "Cookies/com.foo.app.binarycookies", K::Cookies},
+    };
+    for (const auto& e : expected) f.touch(e.first);
+
+    auto r = un::findLeftovers(f.env, f.foo(), {});
+    CHECK(!r.empty());
+    if (!r.empty()) {
+        CHECK(r[0].kind == K::AppBundle);
+        CHECK_EQ(r[0].path, (f.apps / "Foo.app").string());
+    }
+    for (const auto& e : expected) CHECK(hasLeftover(r, e.first, e.second));
+    CHECK_EQ(r.size(), expected.size() + 1);
+    CHECK_EQ(un::toString(K::GroupContainer), std::string("Group Container"));
+}
+
+void testUninstallerNameRuleIsExact() {
+    UninstallFixture f;
+    f.touch(f.lib / "Application Support/Xcode/a");
+    f.touch(f.lib / "Application Support/Code Helper/a");
+    f.touch(f.lib / "Application Support/Code/a");
+    un::AppInfo app;
+    app.path = (f.apps / "Foo.app").string();
+    app.name = "Code";
+    app.bundleId = "com.microsoft.VSCode";
+    auto r = un::findLeftovers(f.env, app, {});
+    CHECK(!hasPath(r, f.lib / "Application Support/Xcode"));
+    CHECK(!hasPath(r, f.lib / "Application Support/Code Helper"));
+    CHECK(hasPath(r, f.lib / "Application Support/Code"));
+}
+
+void testUninstallerLaunchAgentByProgram() {
+    UninstallFixture f;
+    const fs::path x = f.lib / "LaunchAgents/x.plist";
+    const fs::path y = f.lib / "LaunchAgents/y.plist";
+    f.touch(x);
+    f.touch(y);
+    f.agents[x.string()] = {"some.label", (f.apps / "Foo.app/Contents/MacOS/foo").string()};
+    auto r = un::findLeftovers(f.env, f.foo(), {});
+    CHECK(hasLeftover(r, x, un::LeftoverKind::LaunchAgent));
+    CHECK(!hasPath(r, y));
+}
+
+void testUninstallerSystemLibraryNeedsAdmin() {
+    UninstallFixture f;
+    const fs::path d = f.sys / "LaunchDaemons/com.foo.app.helper.plist";
+    f.touch(d);
+    f.notOwned.insert(d.string());
+    auto r = un::findLeftovers(f.env, f.foo(), {});
+    bool found = false;
+    for (const auto& l : r)
+        if (l.path == d.string()) { found = true; CHECK(l.needsAdmin); }
+    CHECK(found);
+    CHECK(!r.empty() && !r[0].needsAdmin);
+}
+
+void testUninstallerUnrelatedFilesUntouched() {
+    UninstallFixture f;
+    f.touch(f.lib / "Caches/com.foobar.app/a");
+    f.touch(f.lib / "Application Support/Foobar/a");
+    auto r = un::findLeftovers(f.env, f.foo(), {});
+    CHECK(!hasPath(r, f.lib / "Caches/com.foobar.app"));
+    CHECK(!hasPath(r, f.lib / "Application Support/Foobar"));
+}
+
+void testUninstallerSystemLibraryAlwaysNeedsAdmin() {
+    UninstallFixture f;
+    const fs::path d = f.sys / "Application Support/Foo";
+    f.touch(d / "a"); // owned by the user, still under /Library
+    auto r = un::findLeftovers(f.env, f.foo(), {});
+    bool found = false;
+    for (const auto& l : r)
+        if (l.path == d.string()) { found = true; CHECK(l.needsAdmin); }
+    CHECK(found);
+}
+
+void testUninstallerEmptyHomeFailsClosed() {
+    UninstallFixture f;
+    f.touch(f.lib / "Caches/com.foo.app/a");
+    f.env.home.clear();
+    auto r = un::findLeftovers(f.env, f.foo(), {});
+    CHECK_EQ(r.size(), 1u);
+    CHECK(!r.empty() && r[0].kind == un::LeftoverKind::AppBundle);
+    CHECK(un::leftoverRoots(f.env).roots().empty());
+}
+
+un::AppInfo fakeApp(const UninstallFixture& f, const std::string& file, const std::string& name, const std::string& id,
+                    std::vector<std::string> groups = {}) {
+    un::AppInfo a;
+    a.path = (f.apps / file).string();
+    a.name = name;
+    a.bundleId = id;
+    a.appGroups = std::move(groups);
+    return a;
+}
+
+void testUninstallerSkipsMoreSpecificSibling() {
+    UninstallFixture f;
+    f.touch(f.lib / "Caches/com.google.Chrome/a");
+    f.touch(f.lib / "Caches/com.google.Chrome.canary/a");
+    const auto chrome = fakeApp(f, "Chrome.app", "Google Chrome", "com.google.Chrome");
+    const auto canary = fakeApp(f, "Canary.app", "Google Chrome Canary", "com.google.Chrome.canary");
+    auto r = un::findLeftovers(f.env, chrome, {chrome, canary});
+    CHECK(hasPath(r, f.lib / "Caches/com.google.Chrome"));
+    CHECK(!hasPath(r, f.lib / "Caches/com.google.Chrome.canary"));
+    // Without the sibling installed, its data is an orphan and is still offered.
+    r = un::findLeftovers(f.env, chrome, {chrome});
+    CHECK(hasPath(r, f.lib / "Caches/com.google.Chrome.canary"));
+}
+
+void testUninstallerSkipsSharedAppGroup() {
+    UninstallFixture f;
+    f.touch(f.lib / "Group Containers/UBF8T346G9.Office/a");
+    f.touch(f.lib / "Group Containers/UBF8T346G9.Word/a");
+    const auto word = fakeApp(f, "Word.app", "Microsoft Word", "com.microsoft.Word",
+                              {"UBF8T346G9.Office", "UBF8T346G9.Word"});
+    const auto excel = fakeApp(f, "Excel.app", "Microsoft Excel", "com.microsoft.Excel", {"UBF8T346G9.Office"});
+    auto r = un::findLeftovers(f.env, word, {word, excel});
+    CHECK(!hasPath(r, f.lib / "Group Containers/UBF8T346G9.Office"));
+    CHECK(hasPath(r, f.lib / "Group Containers/UBF8T346G9.Word"));
+}
+
+struct TrashRecorder {
+    std::vector<std::string> calls;
+    un::TrashFn fn() {
+        return [this](const fs::path& p, std::string&) {
+            calls.push_back(p.string());
+            return true;
+        };
+    }
+};
+
+const un::RunningFn kNotRunning = [](const std::string&) { return false; };
+
+void testUninstallRefusesWhenRunning() {
+    UninstallFixture f;
+    f.touch(f.lib / "Caches/com.foo.app/a");
+    TrashRecorder rec;
+    std::string refusal;
+    auto r = un::uninstall(f.env, f.foo(), un::findLeftovers(f.env, f.foo(), {}), rec.fn(),
+                           [](const std::string&) { return true; }, &refusal);
+    CHECK(r.empty());
+    CHECK_EQ(refusal, std::string("Quit Foo first"));
+    CHECK(rec.calls.empty());
+}
+
+void testUninstallOrderAndSkips() {
+    UninstallFixture f;
+    f.touch(f.lib / "Application Support/Foo/a");
+    f.touch(f.lib / "Preferences/com.foo.app.plist");
+    fs::create_directories(f.tree.outside() / "target");
+    fs::create_directories(f.lib / "Caches");
+    std::error_code ec;
+    fs::create_directory_symlink(f.tree.outside() / "target", f.lib / "Caches/com.foo.app", ec);
+    f.touch(f.sys / "Application Support/Foo/a");
+    f.notOwned.insert((f.sys / "Application Support/Foo").string());
+    auto items = un::findLeftovers(f.env, f.foo(), {});
+    CHECK(hasLeftover(items, f.sys / "Application Support/Foo", un::LeftoverKind::Support));
+    TrashRecorder rec;
+    std::string refusal;
+    auto r = un::uninstall(f.env, f.foo(), items, rec.fn(), kNotRunning, &refusal);
+    CHECK(refusal.empty());
+    CHECK(!rec.calls.empty());
+    if (!rec.calls.empty()) CHECK_EQ(rec.calls.back(), (f.apps / "Foo.app").string());
+    for (const auto& c : rec.calls) CHECK(c.find(f.sys.string()) == std::string::npos);
+    CHECK_EQ(rec.calls.size(), 3u); // Application Support/Foo, the plist, the bundle
+    bool sawSymlinkFailure = false;
+    for (const auto& x : r) {
+        CHECK(x.path.find(f.sys.string()) == std::string::npos);
+        if (x.path == (f.lib / "Caches/com.foo.app").string()) {
+            sawSymlinkFailure = !x.ok && !x.error.empty();
+        }
+    }
+    CHECK(sawSymlinkFailure);
+    CHECK(r.back().ok);
+    CHECK(fs::exists(f.tree.outside() / "target"));
+}
+
+void testUninstallMissingItemIsSuccess() {
+    UninstallFixture f;
+    un::Leftover gone;
+    gone.path = (f.lib / "Caches/com.foo.app").string();
+    gone.kind = un::LeftoverKind::Cache;
+    TrashRecorder rec;
+    auto r = un::uninstall(f.env, f.foo(), {gone}, rec.fn(), kNotRunning, nullptr);
+    CHECK_EQ(r.size(), 1u);
+    if (r.size() == 1) CHECK(r[0].ok);
+    CHECK(rec.calls.empty());
+}
+
+void testUninstallRefusesAppleSigned() {
+    UninstallFixture f;
+    un::AppInfo app = f.foo();
+    app.appleSigned = true;
+    TrashRecorder rec;
+    std::string refusal;
+    auto r = un::uninstall(f.env, app, un::findLeftovers(f.env, app, {}), rec.fn(), kNotRunning, &refusal);
+    CHECK(r.empty());
+    CHECK(!refusal.empty());
+    CHECK(rec.calls.empty());
+}
+
+void testUninstallDefaultEnvironmentFolders() {
+    auto env = un::defaultEnvironment();
+    CHECK_EQ(env.appFolders.size(), 2u);
+    if (env.appFolders.size() == 2) {
+        CHECK_EQ(env.appFolders[0], std::string("/Applications"));
+        CHECK_EQ(env.appFolders[1], env.home + "/Applications");
+    }
+    CHECK(env.readApp && env.ownedByUser && env.readLaunchAgent);
+}
+
+void testUninstallSafetyAcceptsBundle() {
+    ScratchTree tree;
+    const fs::path apps = tree.root() / "apps";
+    writeFileOfSize(apps / "Foo.app/Contents/MacOS/foo", 1);
+    std::string reason;
+    CHECK(maccleaner::safety::isSafeToUninstall(apps / "Foo.app", {apps}, &reason));
+}
+
+void testUninstallSafetyRejects() {
+    ScratchTree tree;
+    const fs::path apps = tree.root() / "apps";
+    writeFileOfSize(apps / "Foo.app/Contents/MacOS/foo", 1);
+    fs::create_directories(apps / "Foo.app/Contents/Helper.app");
+    writeFileOfSize(apps / "notes.txt", 1);
+    writeFileOfSize(tree.outside() / "Foo.app/Contents/MacOS/foo", 1);
+    std::error_code ec;
+    fs::create_directory_symlink(apps / "Foo.app", apps / "Link.app", ec);
+    const std::vector<fs::path> folders{apps};
+    for (const fs::path& p : {apps, apps / "Foo.app/Contents", apps / "Foo.app/Contents/Helper.app",
+                              apps / "notes.txt", apps / "Link.app", tree.outside() / "Foo.app",
+                              apps / "Missing.app"}) {
+        std::string reason;
+        CHECK(!maccleaner::safety::isSafeToUninstall(p, folders, &reason));
+        CHECK(!reason.empty());
+    }
+}
+
+void testUninstallSafetyKeepsHardDenylist() {
+    const char* home = std::getenv("HOME");
+    AllowedRoots allowed;
+    allowed.add(fs::path(home != nullptr ? home : "/") / "Library/Caches");
+    CHECK(!isSafeToDelete("/Applications/Foo.app", allowed, nullptr));
 }
 
 int main() {
@@ -3137,11 +3506,33 @@ int main() {
     testCheckCancelSkipsRemainingSources();
     testUpgradeCommand();
     testCliParsesUpdates();
+    testCliParsesUninstallList();
+    testCliParsesUninstallTarget();
+    testCliUninstallNeedsTarget();
     testBrewOutdatedIgnoresTrailingWarning();
     testCheckReportsBrewOutputWithoutJson();
     testRunCommandTimesOutAfterChildClosesOutput();
     testCheckMarksSkippedSourcesOnCancel();
     testCheckSkipsAppStoreAppWithoutShortVersion();
+    testUninstallerMatchesIdRule();
+    testUninstallerListAppsFilters();
+    testUninstallerFindsEachLocation();
+    testUninstallerNameRuleIsExact();
+    testUninstallerLaunchAgentByProgram();
+    testUninstallerSystemLibraryNeedsAdmin();
+    testUninstallerUnrelatedFilesUntouched();
+    testUninstallerSystemLibraryAlwaysNeedsAdmin();
+    testUninstallerEmptyHomeFailsClosed();
+    testUninstallerSkipsMoreSpecificSibling();
+    testUninstallerSkipsSharedAppGroup();
+    testUninstallRefusesWhenRunning();
+    testUninstallOrderAndSkips();
+    testUninstallMissingItemIsSuccess();
+    testUninstallRefusesAppleSigned();
+    testUninstallDefaultEnvironmentFolders();
+    testUninstallSafetyAcceptsBundle();
+    testUninstallSafetyRejects();
+    testUninstallSafetyKeepsHardDenylist();
 
     if (g_failures == 0) {
         std::cout << "All tests passed.\n";

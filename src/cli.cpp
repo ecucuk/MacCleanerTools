@@ -67,6 +67,8 @@ void printUsage() {
         "  mac_cleaner organize --under=<path> [--dest=<path>] [--by=content|place] [--apply] [--yes]\n"
         "  mac_cleaner malware [--path=<path>]... [--trash] [--yes]\n"
         "  mac_cleaner updates [--upgrade <name>...]\n"
+        "  mac_cleaner uninstall --list\n"
+        "  mac_cleaner uninstall <name|bundle-id|path> [--apply]\n"
         "\n"
         "Commands:\n"
         "  scan       Report what would be cleaned and how much space it would free (default).\n"
@@ -82,6 +84,8 @@ void printUsage() {
         "             Music, Documents and Other. A dry run unless --apply; never overwrites.\n"
         "  malware    Scan for XProtect.plist signatures, quarantined unsigned programs and\n"
         "             suspicious LaunchAgents/LaunchDaemons. Reports only; not a real-time AV.\n"
+        "  uninstall  List installed third-party apps (--list), or show an app and its\n"
+        "             leftovers. Without --apply it is a dry run; --apply moves them to Trash.\n"
         "  updates    List outdated Homebrew, MacPorts, App Store and Sparkle software\n"
         "             (runs brew update and fetches App Store and appcast versions).\n"
         "\n"
@@ -137,7 +141,8 @@ std::optional<CliOptions> parseArgs(int argc, char** argv, CliParseError& error)
     std::size_t index = 0;
     if (!args.empty() && (args[0] == "scan" || args[0] == "clean" || args[0] == "bigfiles" ||
                           args[0] == "processes" || args[0] == "optimize" || args[0] == "photos" ||
-                          args[0] == "organize" || args[0] == "malware" || args[0] == "updates")) {
+                          args[0] == "organize" || args[0] == "malware" || args[0] == "updates" ||
+                          args[0] == "uninstall")) {
         options.command = (args[0] == "scan")       ? Command::Scan
                           : (args[0] == "clean")     ? Command::Clean
                           : (args[0] == "bigfiles")  ? Command::BigFiles
@@ -146,6 +151,7 @@ std::optional<CliOptions> parseArgs(int argc, char** argv, CliParseError& error)
                           : (args[0] == "organize")  ? Command::Organize
                           : (args[0] == "malware")   ? Command::Malware
                           : (args[0] == "updates")   ? Command::Updates
+                          : (args[0] == "uninstall") ? Command::Uninstall
                                                       : Command::Optimize;
         index = 1;
     }
@@ -240,6 +246,10 @@ std::optional<CliOptions> parseArgs(int argc, char** argv, CliParseError& error)
                 error.message = "--upgrade needs at least one name";
                 return std::nullopt;
             }
+        } else if (arg == "--list" && options.command == Command::Uninstall) {
+            options.listApps = true;
+        } else if (options.command == Command::Uninstall && arg.rfind("-", 0) != 0) {
+            options.paths.emplace_back(arg);
         } else if (arg == "--by=content" || arg == "--by=place") {
             options.photoLayout = arg == "--by=place" ? organizer::PhotoLayout::Place : organizer::PhotoLayout::Content;
         } else {
@@ -252,6 +262,11 @@ std::optional<CliOptions> parseArgs(int argc, char** argv, CliParseError& error)
     if ((options.command != Command::Malware) &&
         std::find(args.begin(), args.end(), std::string_view("--trash")) != args.end()) {
         error.message = "--trash is only valid for the malware command";
+        return std::nullopt;
+    }
+    if (options.command == Command::Uninstall &&
+        (options.listApps ? !options.paths.empty() : options.paths.size() != 1)) {
+        error.message = "uninstall needs --list, or exactly one <name|bundle-id|path>";
         return std::nullopt;
     }
     if (options.command == Command::Organize && options.under.empty()) {

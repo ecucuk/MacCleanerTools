@@ -85,7 +85,9 @@ ditto build/MacCleaner.app /Applications/MacCleaner.app
 ### App icon
 
 The icon is drawn from scratch with Core Graphics by `tools/make_icon.m` —
-no third-party artwork, so there is nothing to license. `resources/
+no third-party artwork, so there is nothing to license. It follows the
+macOS 26 icon style: a layered tile with an aurora glow, a glass reflection
+and rim, and frosted-glass sparkles. `resources/
 MacCleaner.icns` is generated from it by `tools/build_icon.sh` and committed,
 so a normal build never runs the generator; re-run the script after changing
 the design. The script honours `$CC`/`$CFLAGS`, which lets a non-Apple clang
@@ -168,11 +170,48 @@ controller over the shared core (see Extending).
   version change. When a removal fails because macOS denied access (TCC),
   the Full Disk Access guide offers itself once per launch.
 
-**Home** is where the app opens: one card per tool, with a cheap live
-summary that refreshes each time Home appears — reclaimable cache size
-(the Storage Cleaner scan, well under a second), free space on the home
-volume, and memory in use (app + wired + compressed, as Activity Monitor
-counts it). Click a card to open its tool.
+**Home** is where the app opens: the Smart Optimize band on top, then one
+card per tool, with a cheap live summary that refreshes each time Home
+appears — reclaimable cache size (the Storage Cleaner scan, well under a
+second), free space on the home volume, and memory in use (app + wired +
+compressed, as Activity Monitor counts it). Click a card to open its tool.
+
+**Smart Optimize** (the round **Optimize** button on Home) runs the tools
+one after another and then shows one review sheet. The steps, in order:
+
+1. **Storage Cleaner** scans every category. Categories whose owners
+   rebuild them (caches, logs, diagnostic reports, DerivedData, simulator,
+   Homebrew, npm, Yarn and pip caches) arrive checked. Xcode Archives,
+   iOS DeviceSupport and the Trash stay unchecked.
+2. **Large Files** lists the 10 largest files over 500 MB in your home
+   folder. Report only.
+3. **Photo Cleaner** looks for similar photos in `~/Pictures`, only when
+   **Also look for similar photos** is checked (off by default). Report only.
+4. **Processes** runs the Optimize rules below. Recommended candidates
+   arrive checked.
+5. **Updater** checks for updates. It is skipped in offline mode. Report
+   only.
+6. **Antivirus** runs the default scan. Report only.
+
+**Stop** cancels the running step and skips the rest (a Storage scan
+finishes first; it cannot be interrupted). The review still opens with what
+was found. In the review, **Move to Trash & Quit Processes** acts on the
+checked rows only, and only after you press it: Storage entries go to the
+Trash (never a permanent delete, each path re-checked by the safety layer
+right before the move), then each checked process gets a SIGTERM after the
+same `isSafeToKill` check as Optimize. A process that already exited
+counts as quit. Report rows have an **Open** button for their tool; Smart
+Optimize never acts on large files, photos, updates or malware findings.
+The result ("2.1 GB moved to the Trash, 3 processes quit") stays on Home
+until the next run.
+
+**Look.** Every tool has its own three-colour gradient. Its hero screen,
+results banner and the splash draw it as an aurora: soft blobs of colour
+that drift slowly. On macOS 26 and later, buttons and panels use the
+system Liquid Glass (`NSGlassEffectView`, the glass button bezel); on
+macOS 14–25 a blurred `NSVisualEffectView` with a light rim stands in.
+**Reduce Motion** stops the aurora, the pulse around the round buttons and
+the scanning animations; **Reduce Transparency** turns the glass solid.
 
 **Storage Cleaner** lists each non-empty category, expandable to the
 individual items underneath it, largest first. Check whole categories or
@@ -607,6 +646,9 @@ src/platform/         OS-specific backends: Trash, images, organizer moves,
                       http_mac.mm (ephemeral NSURLSession GET)
 src/gui/              AppKit front end: MCMainWindowController = sidebar shell,
                       MCHomeViewController = Home hub, MCSplashWindow = splash,
+                      MCSmartOptimizer = Smart Optimize run over the models,
+                      MCSmartReviewController = its review sheet,
+                      MCTheme = gradients, aurora, glass, badges, MCGlassButton,
                       MCCleanerViewController / MCLargeFilesViewController /
                       MCPerformanceViewController / MCPhotosViewController /
                       MCOrganizerViewController / MCAntivirusViewController /

@@ -10,7 +10,6 @@ NSString *const MCUpdaterCachedCountKey = @"MCUpdaterCachedCount";
 
 namespace {
 
-NSString *const kSymbol = @"arrow.triangle.2.circlepath";
 NSString *const kSelectColumn = @"select";
 NSString *const kNameColumn = @"name";
 NSString *const kInstalledColumn = @"installed";
@@ -109,11 +108,11 @@ NSString *stateText(MCUpdateItem *item) {
                                                  tool:MCToolUpdater target:self action:@selector(check:)];
     self.updateButton = [MCGlassButton buttonWithTitle:@"Update Selected" style:MCGlassButtonStylePillPrimary
                                                   tool:MCToolUpdater target:self action:@selector(updateOrStop:)];
-    self.banner = [[MCToolBanner alloc] initWithTool:MCToolUpdater symbol:kSymbol];
+    self.banner = [[MCToolBanner alloc] initWithTool:MCToolUpdater symbol:[MCTheme symbolForTool:MCToolUpdater]];
     self.banner.actions = @[ self.checkButton, self.updateButton ];
 
     self.hero = [[MCHeroView alloc] initWithTool:MCToolUpdater
-                                          symbol:kSymbol
+                                          symbol:[MCTheme symbolForTool:MCToolUpdater]
                                            title:@"Updater"
                                         subtitle:@"Find outdated Homebrew, MacPorts, App Store and Sparkle apps."];
     self.heroCheckButton = [MCGlassButton buttonWithTitle:@"Check" style:MCGlassButtonStyleRound tool:MCToolUpdater

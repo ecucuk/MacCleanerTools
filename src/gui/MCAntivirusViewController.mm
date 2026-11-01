@@ -7,7 +7,6 @@
 
 namespace {
 
-NSString *const kSymbol = @"shield.lefthalf.filled";
 
 NSString *severityTitle(MCMalwareSeverity severity) {
     switch (severity) {
@@ -100,11 +99,11 @@ NSColor *severityColor(MCMalwareSeverity severity) {
                                                   tool:MCToolAntivirus target:self action:@selector(revealSelection:)];
     self.trashButton = [MCGlassButton buttonWithTitle:@"Move to Trash" style:MCGlassButtonStylePillPrimary
                                                  tool:MCToolAntivirus target:self action:@selector(trashSelection:)];
-    self.banner = [[MCToolBanner alloc] initWithTool:MCToolAntivirus symbol:kSymbol];
+    self.banner = [[MCToolBanner alloc] initWithTool:MCToolAntivirus symbol:[MCTheme symbolForTool:MCToolAntivirus]];
     self.banner.actions = @[ self.scanButton, self.revealButton, self.trashButton ];
 
     self.hero = [[MCHeroView alloc] initWithTool:MCToolAntivirus
-                                          symbol:kSymbol
+                                          symbol:[MCTheme symbolForTool:MCToolAntivirus]
                                            title:@"Antivirus"
                                         subtitle:@"Check downloads, apps and login agents for known Mac malware."];
     self.hero.actions = @[

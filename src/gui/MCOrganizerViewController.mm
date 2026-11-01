@@ -13,7 +13,6 @@ namespace {
 NSString *const kSourceKey = @"MCOrganizerSource";
 NSString *const kDestinationKey = @"MCOrganizerDestination"; // absent = the source itself
 NSString *const kByPlaceKey = @"MCOrganizerByPlace";
-NSString *const kSymbol = @"folder.badge.gearshape";
 
 // A label whose text changes: compressible, so a long path truncates instead
 // of Auto Layout growing the window.
@@ -146,11 +145,11 @@ NSTextField *pathLabel(NSString *text) {
                                                     tool:MCToolOrganizer target:self action:@selector(organize:)];
     self.previewButton = [MCGlassButton buttonWithTitle:@"Preview" style:MCGlassButtonStylePill
                                                    tool:MCToolOrganizer target:self action:@selector(previewOrStop:)];
-    self.banner = [[MCToolBanner alloc] initWithTool:MCToolOrganizer symbol:kSymbol];
+    self.banner = [[MCToolBanner alloc] initWithTool:MCToolOrganizer symbol:[MCTheme symbolForTool:MCToolOrganizer]];
     self.banner.actions = @[ self.previewButton, self.organizeButton ];
 
     self.hero = [[MCHeroView alloc] initWithTool:MCToolOrganizer
-                                          symbol:kSymbol
+                                          symbol:[MCTheme symbolForTool:MCToolOrganizer]
                                            title:@"File Organizer"
                                         subtitle:@"Sort a folder into Photos, Videos, Music and Documents."];
     self.hero.actions = @[

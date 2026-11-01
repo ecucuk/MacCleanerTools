@@ -228,7 +228,7 @@ NSString *kindLabel(MCProcessKind kind) {
     bottomBar.spacing = 8;
     bottomBar.translatesAutoresizingMaskIntoConstraints = NO;
 
-    self.banner = [[MCToolBanner alloc] initWithTool:MCToolPerformance symbol:@"gauge.with.needle"];
+    self.banner = [[MCToolBanner alloc] initWithTool:MCToolPerformance symbol:[MCTheme symbolForTool:MCToolPerformance]];
     self.banner.actions = @[ self.pauseButton, self.optimizeButton ];
 
     [self.view addSubview:self.banner];

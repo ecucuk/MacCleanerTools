@@ -9,19 +9,18 @@ namespace {
 
 struct TourTool {
     MCTool tool;
-    NSString *symbol;
     NSString *line;
 };
 
 const TourTool kTourTools[] = {
-    {MCToolCleaner, @"trash", @"Storage Cleaner — caches, logs and developer junk"},
-    {MCToolLargeFiles, @"doc.text.magnifyingglass", @"Large Files — the biggest files, with Quick Look"},
-    {MCToolPhotos, @"photo.on.rectangle.angled", @"Photo Cleaner — duplicate and blurry photos"},
-    {MCToolOrganizer, @"folder.badge.gearshape", @"File Organizer — sort a folder by type or place"},
-    {MCToolUpdater, @"arrow.triangle.2.circlepath", @"Updater — outdated apps in one list"},
-    {MCToolUninstaller, @"trash.square", @"Uninstaller — an app and its leftovers"},
-    {MCToolPerformance, @"gauge.with.needle", @"Performance — processes and Optimize"},
-    {MCToolAntivirus, @"shield.lefthalf.filled", @"Antivirus — an on-demand malware scan"},
+    {MCToolCleaner, @"Storage Cleaner — caches, logs and developer junk"},
+    {MCToolLargeFiles, @"Large Files — the biggest files, with Quick Look"},
+    {MCToolPhotos, @"Photo Cleaner — duplicate and blurry photos"},
+    {MCToolOrganizer, @"File Organizer — sort a folder by type or place"},
+    {MCToolUpdater, @"Updater — outdated apps in one list"},
+    {MCToolUninstaller, @"Uninstaller — an app and its leftovers"},
+    {MCToolPerformance, @"Performance — processes and Optimize"},
+    {MCToolAntivirus, @"Antivirus — an on-demand malware scan"},
 };
 
 NSTextField *bodyText(NSString *text) {
@@ -109,7 +108,7 @@ NSView *page(NSString *symbol, MCTool tool, NSString *title, NSArray<NSView *> *
 - (NSArray<NSView *> *)tourPages {
     NSMutableArray<NSView *> *toolRows = [NSMutableArray array];
     for (const TourTool &tool : kTourTools) {
-        NSImageView *icon = [NSImageView imageViewWithImage:[MCTheme badgeWithSymbol:tool.symbol size:20 tool:tool.tool]];
+        NSImageView *icon = [NSImageView imageViewWithImage:[MCTheme badgeWithSymbol:[MCTheme symbolForTool:tool.tool] size:20 tool:tool.tool]];
         NSStackView *row = [NSStackView stackViewWithViews:@[ icon, [NSTextField labelWithString:tool.line] ]];
         row.spacing = 8;
         [toolRows addObject:row];

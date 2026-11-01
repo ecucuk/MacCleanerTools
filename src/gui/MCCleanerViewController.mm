@@ -203,11 +203,11 @@ NSControlStateValue checkboxStateFor(MCSelectionState state) {
     self.summaryView.showsHeadline = NO; // the banner carries the total
 
     // --- results banner and start screen ---------------------------------
-    self.banner = [[MCToolBanner alloc] initWithTool:MCToolCleaner symbol:@"trash"];
+    self.banner = [[MCToolBanner alloc] initWithTool:MCToolCleaner symbol:[MCTheme symbolForTool:MCToolCleaner]];
     self.banner.actions = @[ self.scanButton, self.cleanButton ];
 
     self.hero = [[MCHeroView alloc] initWithTool:MCToolCleaner
-                                          symbol:@"trash"
+                                          symbol:[MCTheme symbolForTool:MCToolCleaner]
                                            title:@"Storage Cleaner"
                                         subtitle:@"Caches, logs and developer leftovers that are safe to remove."];
     self.hero.actions = @[ [MCGlassButton buttonWithTitle:@"Scan" style:MCGlassButtonStyleRound tool:MCToolCleaner

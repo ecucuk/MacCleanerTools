@@ -154,43 +154,43 @@
         MCToolEntry *cleaner = [[MCToolEntry alloc] init];
         cleaner.title = @"Storage Cleaner";
         cleaner.tool = MCToolCleaner;
-        cleaner.symbolName = @"trash";
+        cleaner.symbolName = [MCTheme symbolForTool:MCToolCleaner];
         cleaner.make = ^{ return (NSViewController *)[[MCCleanerViewController alloc] init]; };
 
         MCToolEntry *largeFiles = [[MCToolEntry alloc] init];
         largeFiles.title = @"Large Files";
         largeFiles.tool = MCToolLargeFiles;
-        largeFiles.symbolName = @"doc.text.magnifyingglass";
+        largeFiles.symbolName = [MCTheme symbolForTool:MCToolLargeFiles];
         largeFiles.make = ^{ return (NSViewController *)[[MCLargeFilesViewController alloc] init]; };
 
         MCToolEntry *performance = [[MCToolEntry alloc] init];
         performance.title = @"Performance";
         performance.tool = MCToolPerformance;
-        performance.symbolName = @"gauge.with.needle";
+        performance.symbolName = [MCTheme symbolForTool:MCToolPerformance];
         performance.make = ^{ return (NSViewController *)[[MCPerformanceViewController alloc] init]; };
 
         MCToolEntry *photoCleaner = [[MCToolEntry alloc] init];
         photoCleaner.title = @"Photo Cleaner";
         photoCleaner.tool = MCToolPhotos;
-        photoCleaner.symbolName = @"photo.on.rectangle.angled";
+        photoCleaner.symbolName = [MCTheme symbolForTool:MCToolPhotos];
         photoCleaner.make = ^{ return (NSViewController *)[[MCPhotosViewController alloc] init]; };
 
         MCToolEntry *organizer = [[MCToolEntry alloc] init];
         organizer.title = @"File Organizer";
         organizer.tool = MCToolOrganizer;
-        organizer.symbolName = @"folder.badge.gearshape";
+        organizer.symbolName = [MCTheme symbolForTool:MCToolOrganizer];
         organizer.make = ^{ return (NSViewController *)[[MCOrganizerViewController alloc] init]; };
 
         MCToolEntry *antivirus = [[MCToolEntry alloc] init];
         antivirus.title = @"Antivirus";
         antivirus.tool = MCToolAntivirus;
-        antivirus.symbolName = @"shield.lefthalf.filled";
+        antivirus.symbolName = [MCTheme symbolForTool:MCToolAntivirus];
         antivirus.make = ^{ return (NSViewController *)[[MCAntivirusViewController alloc] init]; };
 
         MCToolEntry *home = [[MCToolEntry alloc] init];
         home.title = @"Home";
         home.tool = MCToolHome;
-        home.symbolName = @"house";
+        home.symbolName = [MCTheme symbolForTool:MCToolHome];
         __weak MCMainWindowController *weakSelf = self;
         home.make = ^{
             MCHomeViewController *hub = [[MCHomeViewController alloc] init];
@@ -208,13 +208,13 @@
         MCToolEntry *updater = [[MCToolEntry alloc] init];
         updater.title = @"Updater";
         updater.tool = MCToolUpdater;
-        updater.symbolName = @"arrow.triangle.2.circlepath";
+        updater.symbolName = [MCTheme symbolForTool:MCToolUpdater];
         updater.make = ^{ return (NSViewController *)[[MCUpdaterViewController alloc] init]; };
 
         MCToolEntry *uninstaller = [[MCToolEntry alloc] init];
         uninstaller.title = @"Uninstaller";
         uninstaller.tool = MCToolUninstaller;
-        uninstaller.symbolName = @"trash.square";
+        uninstaller.symbolName = [MCTheme symbolForTool:MCToolUninstaller];
         uninstaller.make = ^{ return (NSViewController *)[[MCUninstallerViewController alloc] init]; };
 
         _tools = @[ home, cleaner, largeFiles, photoCleaner, organizer, updater, uninstaller, performance, antivirus ];

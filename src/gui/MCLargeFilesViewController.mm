@@ -282,11 +282,11 @@ constexpr NSUInteger kMaxResults = 200;
     bottomBar.translatesAutoresizingMaskIntoConstraints = NO;
 
     // --- results banner and start screen ---------------------------------
-    self.banner = [[MCToolBanner alloc] initWithTool:MCToolLargeFiles symbol:@"doc.text.magnifyingglass"];
+    self.banner = [[MCToolBanner alloc] initWithTool:MCToolLargeFiles symbol:[MCTheme symbolForTool:MCToolLargeFiles]];
     self.banner.actions = @[ self.scanButton ];
 
     self.hero = [[MCHeroView alloc] initWithTool:MCToolLargeFiles
-                                          symbol:@"doc.text.magnifyingglass"
+                                          symbol:[MCTheme symbolForTool:MCToolLargeFiles]
                                            title:@"Large Files"
                                         subtitle:@"Find the biggest files in a folder and decide what goes."];
     self.hero.actions = @[

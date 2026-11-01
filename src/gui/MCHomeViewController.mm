@@ -223,7 +223,8 @@ constexpr NSInteger kColumns = 2;
                                                                          (long)cached.integerValue];
         }
         case MCToolUninstaller: return @"Remove apps and their leftovers";
-        case MCToolHome: return @"";
+        case MCToolHome:
+        case MCToolSmartOptimize: return @"";
     }
     return @"";
 }

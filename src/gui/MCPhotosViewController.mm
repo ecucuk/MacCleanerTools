@@ -297,11 +297,11 @@ NSImageView *imageViewWithoutIntrinsicSize() {
     }
 
     // --- results banner and start screen ---------------------------------
-    self.banner = [[MCToolBanner alloc] initWithTool:MCToolPhotos symbol:@"photo.on.rectangle.angled"];
+    self.banner = [[MCToolBanner alloc] initWithTool:MCToolPhotos symbol:[MCTheme symbolForTool:MCToolPhotos]];
     self.banner.actions = @[ self.libraryButton, self.folderButton ];
 
     self.hero = [[MCHeroView alloc] initWithTool:MCToolPhotos
-                                          symbol:@"photo.on.rectangle.angled"
+                                          symbol:[MCTheme symbolForTool:MCToolPhotos]
                                            title:@"Photo Cleaner"
                                         subtitle:@"Find duplicate, similar and blurry photos."];
     self.hero.actions = @[

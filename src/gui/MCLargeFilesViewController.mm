@@ -1,5 +1,6 @@
 #import "MCLargeFilesViewController.h"
 
+#import "MCFullDiskAccess.h"
 #import "MCBigFilesModel.h"
 #import "MCHeroView.h"
 #import "MCSettings.h"
@@ -626,7 +627,14 @@ constexpr NSUInteger kMaxResults = 200;
         alert.messageText = @"Some files could not be moved to the Trash";
         alert.informativeText = [problems componentsJoinedByString:@"\n"];
         [alert addButtonWithTitle:@"OK"];
-        [alert beginSheetModalForWindow:self.view.window completionHandler:nil];
+        const BOOL accessDenied = [MCFullDiskAccess isAccessError:alert.informativeText];
+        NSWindow *window = self.view.window;
+        [alert beginSheetModalForWindow:window
+                      completionHandler:^(NSModalResponse) {
+                          if (accessDenied) {
+                              [MCFullDiskAccess presentIfNeededForWindow:window];
+                          }
+                      }];
     }
 }
 

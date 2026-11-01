@@ -9,6 +9,9 @@
 
 #import <Foundation/Foundation.h>
 
+#include <cerrno>
+#include <cstring>
+
 namespace maccleaner::trash {
 
 bool moveToTrash(const std::filesystem::path& path, std::string& error) {
@@ -31,6 +34,12 @@ bool moveToTrash(const std::filesystem::path& path, std::string& error) {
         const BOOL ok = [manager trashItemAtURL:url resultingItemURL:nil error:&nsError];
         if (!ok) {
             error = nsError != nil ? std::string([[nsError localizedDescription] UTF8String]) : "unknown NSFileManager error";
+            // TCC denials read like plain permission errors; name the errno so
+            // the GUI can point at Full Disk Access.
+            NSError* underlying = nsError.userInfo[NSUnderlyingErrorKey];
+            if ([underlying.domain isEqualToString:NSPOSIXErrorDomain] && underlying.code == EPERM) {
+                error += " (" + std::string(std::strerror(EPERM)) + ")";
+            }
             return false;
         }
         return true;

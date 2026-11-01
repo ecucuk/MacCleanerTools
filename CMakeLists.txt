@@ -191,13 +191,16 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
         src/gui/MCSettings.mm
         src/gui/MCSettingsWindowController.mm
         src/gui/MCUpdateChecker.mm
+        src/gui/MCAboutWindowController.mm
+        src/gui/MCFullDiskAccess.mm
         "${MACCLEANER_VIZ_HEADER_STAGED}"
         "${MACCLEANER_ICON}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
     )
     # Listing the .icns as a source with a Resources package location is how
     # CMake copies it into MacCleaner.app/Contents/Resources; the plist key
     # below tells Finder and the Dock to use it.
-    set_source_files_properties("${MACCLEANER_ICON}" PROPERTIES
+    set_source_files_properties("${MACCLEANER_ICON}" "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE" PROPERTIES
         MACOSX_PACKAGE_LOCATION Resources)
     target_link_libraries(MacCleaner PRIVATE maccleaner_core maccleaner_viz maccleaner_warnings)
     target_include_directories(MacCleaner PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/viz-header")

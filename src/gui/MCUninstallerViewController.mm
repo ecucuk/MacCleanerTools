@@ -1,5 +1,6 @@
 #import "MCUninstallerViewController.h"
 
+#import "MCFullDiskAccess.h"
 #import "MCHeroView.h"
 #import "MCTheme.h"
 #import "MCToolBanner.h"
@@ -427,6 +428,12 @@ NSScrollView *cardFor(NSTableView *table) {
                     : [NSString stringWithFormat:@"Moved %lu item(s) to the Trash; %lu failed (see the list).",
                                                  (unsigned long)(results.count - failed), (unsigned long)failed];
     [self updateState];
+    for (MCRemovalRow *result in results) {
+        if (!result.ok && [MCFullDiskAccess isAccessError:result.error]) {
+            [MCFullDiskAccess presentIfNeededForWindow:self.view.window];
+            break;
+        }
+    }
 }
 
 #pragma mark - NSTableViewDataSource / Delegate

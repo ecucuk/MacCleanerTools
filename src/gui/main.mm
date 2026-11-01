@@ -4,11 +4,33 @@
 
 #import <AppKit/AppKit.h>
 
+#include "maccleaner/selfupdate.hpp"
+
+#import "MCAboutWindowController.h"
+#import "MCFullDiskAccess.h"
 #import "MCMainWindowController.h"
 #import "MCSettings.h"
 #import "MCSettingsWindowController.h"
 #import "MCSplashWindow.h"
 #import "MCUpdateChecker.h"
+
+// The new-issue page with the app and macOS versions filled in. Nothing
+// else: no paths, no user name, no tool data.
+static NSURL *issueReportURL(void) {
+#if defined(__arm64__)
+    NSString *const cpu = @"arm64";
+#else
+    NSString *const cpu = @"x86_64";
+#endif
+    NSURLComponents *components = [NSURLComponents
+        componentsWithString:[NSString stringWithUTF8String:std::string(maccleaner::selfupdate::kIssuesUrl).c_str()]];
+    NSString *body = [NSString stringWithFormat:@"**What happened?**\n\n\n**Steps to reproduce**\n\n\n---\n"
+                                                @"MacCleaner %@\nmacOS %@\nCPU: %@\n",
+                                                MCSettings.appVersion,
+                                                NSProcessInfo.processInfo.operatingSystemVersionString, cpu];
+    components.queryItems = @[ [NSURLQueryItem queryItemWithName:@"body" value:body] ];
+    return components.URL;
+}
 
 @interface MCAppDelegate : NSObject <NSApplicationDelegate, NSMenuItemValidation>
 @property(nonatomic, strong) MCMainWindowController *windowController;
@@ -70,6 +92,18 @@
 
 #pragma mark Dialogs
 
+- (IBAction)showAbout:(id)sender {
+    [MCAboutWindowController.shared showWindow:nil];
+}
+
+- (IBAction)reportIssue:(id)sender {
+    [NSWorkspace.sharedWorkspace openURL:issueReportURL()];
+}
+
+- (IBAction)showFullDiskAccess:(id)sender {
+    [MCFullDiskAccess presentForWindow:self.windowController.window];
+}
+
 - (IBAction)checkForUpdates:(id)sender {
     [MCUpdateChecker.shared checkManually];
 }
@@ -80,18 +114,13 @@
 
 // Each dialog lands in its own change; until then its item stays disabled
 // (see validateMenuItem:) rather than doing nothing when clicked.
-- (IBAction)showAbout:(id)sender {}
 - (IBAction)showHelp:(id)sender {}
 - (IBAction)showWelcomeTour:(id)sender {}
 - (IBAction)showWhatsNew:(id)sender {}
-- (IBAction)reportIssue:(id)sender {}
-- (IBAction)showFullDiskAccess:(id)sender {}
 
 - (BOOL)validateMenuItem:(NSMenuItem *)item {
     const SEL pending[] = {
-        @selector(showAbout:),
-        @selector(showHelp:),        @selector(showWelcomeTour:), @selector(showWhatsNew:),
-        @selector(reportIssue:),     @selector(showFullDiskAccess:),
+        @selector(showHelp:), @selector(showWelcomeTour:), @selector(showWhatsNew:),
     };
     for (SEL action : pending) {
         if (item.action == action) {

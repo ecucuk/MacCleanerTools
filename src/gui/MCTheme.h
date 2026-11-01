@@ -20,6 +20,7 @@ typedef NS_ENUM(NSInteger, MCTool) {
     MCToolHome, // the hub and the splash screen
     MCToolAntivirus,
     MCToolUpdater,
+    MCToolUninstaller,
 };
 
 @interface MCTheme : NSObject

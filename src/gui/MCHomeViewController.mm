@@ -222,6 +222,7 @@ constexpr NSInteger kColumns = 2;
                                             : [NSString stringWithFormat:@"%ld update(s) at last check",
                                                                          (long)cached.integerValue];
         }
+        case MCToolUninstaller: return @"Remove apps and their leftovers";
         case MCToolHome: return @"";
     }
     return @"";

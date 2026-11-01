@@ -169,6 +169,7 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
         src/gui/MCOrganizerModel.mm
         src/gui/MCMalwareModel.mm
         src/gui/MCUpdaterModel.mm
+        src/gui/MCUninstallerModel.mm
         src/gui/MCMainWindowController.mm
         src/gui/MCHomeViewController.mm
         src/gui/MCSplashWindow.mm
@@ -179,6 +180,7 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
         src/gui/MCOrganizerViewController.mm
         src/gui/MCAntivirusViewController.mm
         src/gui/MCUpdaterViewController.mm
+        src/gui/MCUninstallerViewController.mm
         src/gui/MCOptimizeSheetController.mm
         src/gui/MCUsageSummaryView.mm
         src/gui/MCTheme.mm

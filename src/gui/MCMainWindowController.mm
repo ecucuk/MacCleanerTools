@@ -6,6 +6,7 @@
 #import "MCPerformanceViewController.h"
 #import "MCAntivirusViewController.h"
 #import "MCOrganizerViewController.h"
+#import "MCUninstallerViewController.h"
 #import "MCUpdaterViewController.h"
 #import "MCPhotosViewController.h"
 #import "MCTheme.h"
@@ -206,7 +207,13 @@
         updater.symbolName = @"arrow.triangle.2.circlepath";
         updater.make = ^{ return (NSViewController *)[[MCUpdaterViewController alloc] init]; };
 
-        _tools = @[ home, cleaner, largeFiles, photoCleaner, organizer, updater, performance, antivirus ];
+        MCToolEntry *uninstaller = [[MCToolEntry alloc] init];
+        uninstaller.title = @"Uninstaller";
+        uninstaller.tool = MCToolUninstaller;
+        uninstaller.symbolName = @"trash.square";
+        uninstaller.make = ^{ return (NSViewController *)[[MCUninstallerViewController alloc] init]; };
+
+        _tools = @[ home, cleaner, largeFiles, photoCleaner, organizer, updater, uninstaller, performance, antivirus ];
 
         _sidebar = [[MCToolSidebarController alloc] init];
         _sidebar.tools = _tools;

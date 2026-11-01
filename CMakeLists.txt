@@ -1,7 +1,15 @@
 cmake_minimum_required(VERSION 3.21)
 
+# Without this the compiler targets the build machine's macOS, and the app
+# then refuses to launch on anything older. 14.0: the SwiftUI Activity window
+# uses macOS 14 API. Must be set before project().
+# FORCE only over an empty value: older build trees cached it empty.
+if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS version" FORCE)
+endif()
+
 project(mac_cleaner
-    VERSION 1.0.0
+    VERSION 1.0.1
     DESCRIPTION "macOS disk cleanup / storage optimization tool"
     LANGUAGES CXX)
 
@@ -126,6 +134,21 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
             "MACCLEANER_BUILD_GUI needs Swift, which CMake only supports with the "
             "Ninja or Xcode generators (got: ${CMAKE_GENERATOR}). Configure with "
             "-G Ninja, or pass -DMACCLEANER_BUILD_GUI=OFF for a CLI-only build.")
+    endif()
+    # swiftc takes its architecture and minimum OS from -target, not from
+    # CMAKE_OSX_ARCHITECTURES; one architecture per build (see
+    # tools/make_release.sh for the universal app).
+    if(NOT CMAKE_Swift_COMPILER_TARGET)
+        list(LENGTH CMAKE_OSX_ARCHITECTURES MACCLEANER_ARCH_COUNT)
+        if(MACCLEANER_ARCH_COUNT GREATER 1)
+            message(FATAL_ERROR "Swift builds one architecture at a time; build each and lipo them "
+                                "(tools/make_release.sh).")
+        elseif(MACCLEANER_ARCH_COUNT EQUAL 1)
+            set(MACCLEANER_SWIFT_ARCH "${CMAKE_OSX_ARCHITECTURES}")
+        else()
+            set(MACCLEANER_SWIFT_ARCH "${CMAKE_HOST_SYSTEM_PROCESSOR}")
+        endif()
+        set(CMAKE_Swift_COMPILER_TARGET "${MACCLEANER_SWIFT_ARCH}-apple-macos${CMAKE_OSX_DEPLOYMENT_TARGET}")
     endif()
     enable_language(Swift)
 

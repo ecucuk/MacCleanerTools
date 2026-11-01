@@ -150,38 +150,67 @@ bool isPackageDirectory(const std::filesystem::path& dir) {
 GeocodeStatus reverseGeocode(GeoPoint point, Place& place) {
     @autoreleasepool {
         CLLocation* location = [[CLLocation alloc] initWithLatitude:point.latitude longitude:point.longitude];
-        MKReverseGeocodingRequest* request = [[MKReverseGeocodingRequest alloc] initWithLocation:location];
-        if (request == nil) {
-            return GeocodeStatus::Failed;
-        }
         __block GeocodeStatus status = GeocodeStatus::Failed;
         __block NSString* country = nil;
         __block NSString* province = nil;
         __block NSString* city = nil;
         __block bool done = false;
         dispatch_semaphore_t finished = dispatch_semaphore_create(0);
-        // The completion handler runs on the main queue.
-        [request getMapItemsWithCompletionHandler:^(NSArray<MKMapItem*>* items, NSError* error) {
-          MKAddressRepresentations* address = items.firstObject.addressRepresentations;
-          if (address != nil) {
-              country = address.regionName;
-              // Over water Apple names the country as the city.
-              city = [address.cityName isEqual:address.regionName] ? nil : address.cityName;
-              // MKAddressRepresentations has no state / il field; cityName is the
-              // district in Turkey (Kartal, not İstanbul).
+        void (^cancel)(void) = nil;
+        if (@available(macOS 26.0, *)) {
+            MKReverseGeocodingRequest* request = [[MKReverseGeocodingRequest alloc] initWithLocation:location];
+            if (request == nil) {
+                return GeocodeStatus::Failed;
+            }
+            cancel = ^{ [request cancel]; };
+            // The completion handler runs on the main queue.
+            [request getMapItemsWithCompletionHandler:^(NSArray<MKMapItem*>* items, NSError* error) {
+              MKAddressRepresentations* address = items.firstObject.addressRepresentations;
+              if (address != nil) {
+                  country = address.regionName;
+                  // Over water Apple names the country as the city.
+                  city = [address.cityName isEqual:address.regionName] ? nil : address.cityName;
+                  // MKAddressRepresentations has no state / il field; cityName is the
+                  // district in Turkey (Kartal, not İstanbul).
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-              province = items.firstObject.placemark.administrativeArea;
+                  province = items.firstObject.placemark.administrativeArea;
 #pragma clang diagnostic pop
-              status = country.length > 0 ? GeocodeStatus::Found : GeocodeStatus::NotFound;
-          } else if ([error.domain isEqual:MKErrorDomain] && error.code == MKErrorLoadingThrottled) {
-              status = GeocodeStatus::Throttled;
-          } else if ([error.domain isEqual:MKErrorDomain] && error.code == MKErrorPlacemarkNotFound) {
-              status = GeocodeStatus::NotFound;
-          }
-          done = true;
-          dispatch_semaphore_signal(finished);
-        }];
+                  status = country.length > 0 ? GeocodeStatus::Found : GeocodeStatus::NotFound;
+              } else if ([error.domain isEqual:MKErrorDomain] && error.code == MKErrorLoadingThrottled) {
+                  status = GeocodeStatus::Throttled;
+              } else if ([error.domain isEqual:MKErrorDomain] && error.code == MKErrorPlacemarkNotFound) {
+                  status = GeocodeStatus::NotFound;
+              }
+              done = true;
+              dispatch_semaphore_signal(finished);
+            }];
+        } else {
+            // macOS 14-25: CLGeocoder, which macOS 26 deprecates for the request above.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+            CLGeocoder* geocoder = [[CLGeocoder alloc] init];
+            cancel = ^{ [geocoder cancelGeocode]; };
+            [geocoder reverseGeocodeLocation:location
+                           completionHandler:^(NSArray<CLPlacemark*>* placemarks, NSError* error) {
+                             CLPlacemark* placemark = placemarks.firstObject;
+                             if (placemark != nil) {
+                                 country = placemark.country;
+                                 province = placemark.administrativeArea;
+                                 city = [placemark.locality isEqual:placemark.country] ? nil : placemark.locality;
+                                 status = country.length > 0 ? GeocodeStatus::Found : GeocodeStatus::NotFound;
+                             } else if ([error.domain isEqual:kCLErrorDomain] && error.code == kCLErrorNetwork) {
+                                 // CLGeocoder reports its rate limit as a network error.
+                                 status = GeocodeStatus::Throttled;
+                             } else if ([error.domain isEqual:kCLErrorDomain] &&
+                                        error.code == kCLErrorGeocodeFoundNoResult) {
+                                 status = GeocodeStatus::NotFound;
+                             }
+                             done = true;
+                             dispatch_semaphore_signal(finished);
+                           }];
+#pragma clang diagnostic pop
+        }
         // A stalled network must not hang the scan (or its Cancel) for good.
         constexpr double kTimeoutSeconds = 30;
         bool timedOut = false;
@@ -195,7 +224,7 @@ GeocodeStatus reverseGeocode(GeoPoint point, Place& place) {
                            finished, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kTimeoutSeconds * NSEC_PER_SEC))) != 0;
         }
         if (timedOut) {
-            [request cancel];
+            cancel();
             return GeocodeStatus::Failed;
         }
         place.country = country != nil ? country.UTF8String : "";

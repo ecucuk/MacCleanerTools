@@ -55,7 +55,7 @@ constexpr CGFloat kHeight = 260;
         content.wantsLayer = YES;
         content.layer.cornerRadius = 18;
         content.layer.masksToBounds = YES;
-        content.background = [MCTheme gradientLayerForTool:MCToolHome];
+        content.background = [MCTheme auroraLayerForTool:MCToolHome];
         [content.layer insertSublayer:content.background atIndex:0];
 
         NSImageView *icon = [NSImageView imageViewWithImage:NSApp.applicationIconImage];

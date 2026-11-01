@@ -43,6 +43,54 @@ NSImage *_Nullable whiteSymbol(NSString *name, CGFloat pointSize) {
 
 } // namespace
 
+#pragma mark - Aurora
+
+/// The gradient plus one blurred radial blob per colour stop, each drifting
+/// on its own period so the pattern never visibly repeats. Animations live
+/// on the render server: no timers, nothing on the main thread.
+@interface MCAuroraLayer : CAGradientLayer
+@property(nonatomic, copy) NSArray<CAGradientLayer *> *blobs;
+@property(nonatomic) CGSize laidOutSize;
+@end
+
+@implementation MCAuroraLayer
+
+- (void)layoutSublayers {
+    [super layoutSublayers];
+    const CGSize size = self.bounds.size;
+    if (CGSizeEqualToSize(size, self.laidOutSize) || size.width <= 0 || size.height <= 0) {
+        return;
+    }
+    self.laidOutSize = size;
+    // Start and end of each blob's drift, as fractions of the bounds.
+    static const CGPoint kFrom[] = {{0.15, 0.85}, {0.85, 0.75}, {0.5, 0.1}};
+    static const CGPoint kTo[] = {{0.45, 0.55}, {0.6, 0.25}, {0.2, 0.35}};
+    static const CFTimeInterval kPeriod[] = {12, 16, 20};
+    const CGFloat diameter = MAX(size.width, size.height) * 0.75;
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    [self.blobs enumerateObjectsUsingBlock:^(CAGradientLayer *blob, NSUInteger i, BOOL *) {
+        blob.bounds = CGRectMake(0, 0, diameter, diameter);
+        const CGPoint from = CGPointMake(kFrom[i].x * size.width, kFrom[i].y * size.height);
+        blob.position = from;
+        [blob removeAllAnimations];
+        if (MCTheme.reduceMotion) {
+            return;
+        }
+        CABasicAnimation *drift = [CABasicAnimation animationWithKeyPath:@"position"];
+        drift.fromValue = [NSValue valueWithPoint:from];
+        drift.toValue = [NSValue valueWithPoint:NSMakePoint(kTo[i].x * size.width, kTo[i].y * size.height)];
+        drift.duration = kPeriod[i];
+        drift.autoreverses = YES;
+        drift.repeatCount = HUGE_VALF;
+        drift.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+        [blob addAnimation:drift forKey:@"drift"];
+    }];
+    [CATransaction commit];
+}
+
+@end
+
 @implementation MCTheme
 
 + (NSString *)symbolForTool:(MCTool)tool {
@@ -84,6 +132,33 @@ NSImage *_Nullable whiteSymbol(NSString *name, CGFloat pointSize) {
     // Layer space is y-up on macOS: (0, 1) is the top-left corner.
     layer.startPoint = CGPointMake(0, 1);
     layer.endPoint = CGPointMake(1, 0);
+    return layer;
+}
+
++ (CAGradientLayer *)auroraLayerForTool:(MCTool)tool {
+    MCAuroraLayer *layer = [MCAuroraLayer layer];
+    CAGradientLayer *base = [self gradientLayerForTool:tool];
+    layer.colors = base.colors;
+    layer.startPoint = base.startPoint;
+    layer.endPoint = base.endPoint;
+    layer.masksToBounds = YES;
+    NSMutableArray<CAGradientLayer *> *blobs = [NSMutableArray array];
+    NSArray<NSColor *> *colors = [self colorsForTool:tool];
+    for (NSUInteger i = 0; i < colors.count; ++i) {
+        // Each blob carries the next stop's colour, so blobs stand out from
+        // the gradient under them; a little white keeps them luminous.
+        NSColor *color = colors[(i + 1) % colors.count];
+        NSColor *blended = [color blendedColorWithFraction:0.15 ofColor:NSColor.whiteColor];
+        NSColor *light = blended != nil ? blended : color;
+        CAGradientLayer *blob = [CAGradientLayer layer];
+        blob.type = kCAGradientLayerRadial;
+        blob.colors = @[ (id)[light colorWithAlphaComponent:0.85].CGColor, (id)[light colorWithAlphaComponent:0].CGColor ];
+        blob.startPoint = CGPointMake(0.5, 0.5);
+        blob.endPoint = CGPointMake(1, 1);
+        [layer addSublayer:blob];
+        [blobs addObject:blob];
+    }
+    layer.blobs = blobs;
     return layer;
 }
 
@@ -136,15 +211,29 @@ NSImage *_Nullable whiteSymbol(NSString *name, CGFloat pointSize) {
 
 + (NSView *)glassViewWithCornerRadius:(CGFloat)radius content:(NSView *)content {
     content.translatesAutoresizingMaskIntoConstraints = NO;
+    NSView *panel = nil;
     if (@available(macOS 26.0, *)) {
         NSGlassEffectView *glass = [[NSGlassEffectView alloc] initWithFrame:NSZeroRect];
-        glass.translatesAutoresizingMaskIntoConstraints = NO;
         glass.cornerRadius = radius;
         glass.contentView = content;
-        return glass;
+        panel = glass;
+    } else {
+        panel = [self blurPanelWithCornerRadius:radius];
+        [panel addSubview:content];
     }
+    panel.translatesAutoresizingMaskIntoConstraints = NO;
+    // Size the panel from its content in both paths.
+    [NSLayoutConstraint activateConstraints:@[
+        [content.leadingAnchor constraintEqualToAnchor:panel.leadingAnchor],
+        [content.trailingAnchor constraintEqualToAnchor:panel.trailingAnchor],
+        [content.topAnchor constraintEqualToAnchor:panel.topAnchor],
+        [content.bottomAnchor constraintEqualToAnchor:panel.bottomAnchor],
+    ]];
+    return panel;
+}
+
++ (NSView *)blurPanelWithCornerRadius:(CGFloat)radius {
     NSVisualEffectView *blur = [[NSVisualEffectView alloc] initWithFrame:NSZeroRect];
-    blur.translatesAutoresizingMaskIntoConstraints = NO;
     blur.material = NSVisualEffectMaterialPopover;
     blur.blendingMode = NSVisualEffectBlendingModeWithinWindow;
     blur.state = NSVisualEffectStateActive;
@@ -153,13 +242,6 @@ NSImage *_Nullable whiteSymbol(NSString *name, CGFloat pointSize) {
     blur.layer.masksToBounds = YES;
     blur.layer.borderWidth = 0.5;
     blur.layer.borderColor = [NSColor colorWithWhite:1 alpha:0.25].CGColor;
-    [blur addSubview:content];
-    [NSLayoutConstraint activateConstraints:@[
-        [content.leadingAnchor constraintEqualToAnchor:blur.leadingAnchor],
-        [content.trailingAnchor constraintEqualToAnchor:blur.trailingAnchor],
-        [content.topAnchor constraintEqualToAnchor:blur.topAnchor],
-        [content.bottomAnchor constraintEqualToAnchor:blur.bottomAnchor],
-    ]];
     return blur;
 }
 
@@ -187,8 +269,25 @@ NSImage *_Nullable whiteSymbol(NSString *name, CGFloat pointSize) {
 @property(nonatomic) MCGlassButtonStyle glassStyle;
 @property(nonatomic) MCTool tool;
 @property(nonatomic) BOOL hovered;
+/// Round style: a ring that keeps expanding out of the button and fading.
+@property(nonatomic, strong, nullable) CAShapeLayer *halo;
 /// macOS 26+ pills: the system Liquid Glass bezel draws the button.
 @property(nonatomic) BOOL systemGlass;
+- (void)drawCustomInRect:(NSRect)rect;
+@end
+
+/// Draws the custom styles. A cell rather than -drawRect: on the button:
+/// overriding -drawRect: stops AppKit from rendering the system glass bezel
+/// on macOS 26, so the system-glass buttons must keep the stock cell.
+@interface MCGlassButtonCell : NSButtonCell
+@end
+
+@implementation MCGlassButtonCell
+
+- (void)drawWithFrame:(NSRect)cellFrame inView:(NSView *)controlView {
+    [(MCGlassButton *)controlView drawCustomInRect:cellFrame];
+}
+
 @end
 
 @implementation MCGlassButton
@@ -199,14 +298,17 @@ NSImage *_Nullable whiteSymbol(NSString *name, CGFloat pointSize) {
                          target:(nullable id)target
                          action:(nullable SEL)action {
     MCGlassButton *button = [[self alloc] initWithFrame:NSZeroRect];
+    if (@available(macOS 26.0, *)) {
+        button.systemGlass = style != MCGlassButtonStyleRound;
+    }
+    if (!button.systemGlass) {
+        button.cell = [[MCGlassButtonCell alloc] init]; // first: a new cell resets target and title
+    }
     button.glassStyle = style;
     button.tool = tool;
     button.target = target;
     button.action = action;
     button.translatesAutoresizingMaskIntoConstraints = NO;
-    if (@available(macOS 26.0, *)) {
-        button.systemGlass = style != MCGlassButtonStyleRound;
-    }
     if (button.systemGlass) {
         if (@available(macOS 26.0, *)) {
             button.bezelStyle = NSBezelStyleGlass;
@@ -221,6 +323,44 @@ NSImage *_Nullable whiteSymbol(NSString *name, CGFloat pointSize) {
     }
     button.title = title;
     return button;
+}
+
+- (void)layout {
+    [super layout];
+    if (self.glassStyle != MCGlassButtonStyleRound) {
+        return;
+    }
+    if (self.halo == nil) {
+        self.wantsLayer = YES;
+        self.halo = [CAShapeLayer layer];
+        self.halo.fillColor = nil;
+        self.halo.strokeColor = [NSColor colorWithWhite:1 alpha:0.8].CGColor;
+        self.halo.lineWidth = 2;
+        self.halo.opacity = 0;
+        [self.layer addSublayer:self.halo];
+    }
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    self.halo.frame = self.bounds;
+    CGPathRef path = CGPathCreateWithEllipseInRect(NSInsetRect(self.bounds, 2, 2), NULL);
+    self.halo.path = path;
+    CGPathRelease(path);
+    [CATransaction commit];
+    if ([self.halo animationForKey:@"halo"] != nil || MCTheme.reduceMotion) {
+        return;
+    }
+    CABasicAnimation *grow = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
+    grow.fromValue = @1;
+    grow.toValue = @1.3;
+    CABasicAnimation *fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
+    fade.fromValue = @0.7;
+    fade.toValue = @0;
+    CAAnimationGroup *pulse = [CAAnimationGroup animation];
+    pulse.animations = @[ grow, fade ];
+    pulse.duration = 1.8;
+    pulse.repeatCount = HUGE_VALF;
+    pulse.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
+    [self.halo addAnimation:pulse forKey:@"halo"];
 }
 
 - (NSFont *)titleFont {
@@ -295,11 +435,7 @@ NSImage *_Nullable whiteSymbol(NSString *name, CGFloat pointSize) {
     return [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(rect, 1, 1) xRadius:radius - 1 yRadius:radius - 1];
 }
 
-- (void)drawRect:(NSRect)dirtyRect {
-    if (self.systemGlass) {
-        [super drawRect:dirtyRect];
-        return;
-    }
+- (void)drawCustomInRect:(NSRect)rect {
     CGContextRef context = NSGraphicsContext.currentContext.CGContext;
     CGContextSaveGState(context);
     if (!self.enabled) {

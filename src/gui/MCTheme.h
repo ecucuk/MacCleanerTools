@@ -43,6 +43,10 @@ typedef NS_ENUM(NSInteger, MCTool) {
 /// The tool's SF Symbol (sidebar, badge, hero, banner).
 + (NSString *)symbolForTool:(MCTool)tool;
 
+/// The tool's gradient with three soft colour blobs drifting over it
+/// (still under Reduce Motion). Set its frame like any layer.
++ (CAGradientLayer *)auroraLayerForTool:(MCTool)tool;
+
 /// A rounded square with the tool's gradient and a white SF Symbol, in the
 /// style of System Settings.
 + (NSImage *)badgeWithSymbol:(NSString *)symbolName size:(CGFloat)size tool:(MCTool)tool;

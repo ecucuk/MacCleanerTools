@@ -263,6 +263,32 @@ NSImage *_Nullable whiteSymbol(NSString *name, CGFloat pointSize) {
 
 @end
 
+#pragma mark - MCAuroraView
+
+@implementation MCAuroraView {
+    CALayer *_aurora;
+}
+
+- (instancetype)initWithTool:(MCTool)tool {
+    if ((self = [super initWithFrame:NSZeroRect])) {
+        self.translatesAutoresizingMaskIntoConstraints = NO;
+        self.wantsLayer = YES;
+        _aurora = [MCTheme auroraLayerForTool:tool];
+        [self.layer addSublayer:_aurora];
+    }
+    return self;
+}
+
+- (void)layout {
+    [super layout];
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    _aurora.frame = self.bounds;
+    [CATransaction commit];
+}
+
+@end
+
 #pragma mark - MCGlassButton
 
 @interface MCGlassButton ()

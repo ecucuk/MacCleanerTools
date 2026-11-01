@@ -63,6 +63,11 @@ typedef NS_ENUM(NSInteger, MCTool) {
 
 @end
 
+/// A view whose background is the tool's aurora (see +auroraLayerForTool:).
+@interface MCAuroraView : NSView
+- (instancetype)initWithTool:(MCTool)tool;
+@end
+
 typedef NS_ENUM(NSInteger, MCGlassButtonStyle) {
     MCGlassButtonStyleRound,       // the hero's big circular action
     MCGlassButtonStylePill,        // a translucent white pill on a gradient

@@ -2,6 +2,7 @@
 
 #import <Foundation/Foundation.h>
 #include <Security/Security.h>
+#include <pwd.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -36,7 +37,11 @@ std::string utf8(id s) {
 Environment defaultEnvironment() {
     Environment env;
     const char* home = std::getenv("HOME");
-    env.home = home != nullptr ? home : "";
+    if (home == nullptr || *home == '\0') {
+        const passwd* pw = ::getpwuid(::getuid());
+        home = pw != nullptr ? pw->pw_dir : nullptr;
+    }
+    env.home = home != nullptr ? home : ""; // empty: findLeftovers and leftoverRoots fail closed
     env.appFolders = {"/Applications"};
     if (!env.home.empty()) env.appFolders.push_back(env.home + "/Applications");
 

@@ -12,6 +12,8 @@
 #include <string>
 #include <vector>
 
+#include <unistd.h>
+
 using namespace maccleaner;
 namespace fs = std::filesystem;
 
@@ -42,7 +44,8 @@ bool trashKeepingErrno(const fs::path &path, std::string &error) {
         if ([underlying.domain isEqualToString:NSPOSIXErrorDomain] && underlying.code == EPERM) {
             error = std::strerror(EPERM);
         } else {
-            error = nsError != nil ? std::string(nsError.localizedDescription.UTF8String) : "unknown NSFileManager error";
+            const char *text = nsError.localizedDescription.UTF8String; // nil error or description: NULL
+            error = text != nullptr ? text : "unknown NSFileManager error";
         }
         return false;
     }
@@ -184,6 +187,11 @@ bool trashKeepingErrno(const fs::path &path, std::string &error) {
         std::vector<uninstaller::Leftover> selected;
         for (MCLeftoverRow *item in items) {
             selected.push_back(item->_core);
+        }
+        // The GUI quits by bundle ID; helpers inside the bundle can outlive the
+        // main process for a moment, so give them up to ~1 s before the core checks.
+        for (int i = 0; i < 10 && uninstaller::isAppRunning(app->_core.path); ++i) {
+            usleep(100 * 1000);
         }
         std::string refusal;
         const auto results = uninstaller::uninstall(self->_environment, app->_core, selected, trashKeepingErrno,

@@ -1,6 +1,7 @@
 #include "maccleaner/uninstaller.hpp"
 
 #include <cstdlib>
+#include <pwd.h>
 #include <unistd.h>
 #include <sys/stat.h>
 
@@ -10,7 +11,12 @@ namespace maccleaner::uninstaller {
 Environment defaultEnvironment() {
     Environment env;
     env.appFolders = {"/Applications"};
-    if (const char* home = std::getenv("HOME")) {
+    const char* home = std::getenv("HOME");
+    if (home == nullptr || *home == '\0') {
+        const passwd* pw = ::getpwuid(::getuid());
+        home = pw != nullptr ? pw->pw_dir : nullptr;
+    }
+    if (home != nullptr && *home != '\0') {
         env.home = home;
         env.appFolders.push_back(env.home + "/Applications");
     }

@@ -412,7 +412,9 @@ NSScrollView *cardFor(NSTableView *table) {
         [self applySearch];
     }
     self.banner.value = bytesText(freed);
-    self.banner.caption = [NSString stringWithFormat:@"freed · %@ moved to the Trash", app.name];
+    self.banner.caption = [NSString stringWithFormat:bundleGone ? @"freed · %@ moved to the Trash"
+                                                                : @"freed · leftovers of %@ moved to the Trash",
+                                                                app.name];
     self.statusLabel.stringValue =
         failed == 0 ? [NSString stringWithFormat:@"Moved %lu item(s) to the Trash.", (unsigned long)results.count]
                     : [NSString stringWithFormat:@"Moved %lu item(s) to the Trash; %lu failed (see the list).",

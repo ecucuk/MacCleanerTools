@@ -3136,6 +3136,96 @@ void testUninstallerUnrelatedFilesUntouched() {
     CHECK(!hasPath(r, f.lib / "Application Support/Foobar"));
 }
 
+struct TrashRecorder {
+    std::vector<std::string> calls;
+    un::TrashFn fn() {
+        return [this](const fs::path& p, std::string&) {
+            calls.push_back(p.string());
+            return true;
+        };
+    }
+};
+
+const un::RunningFn kNotRunning = [](const std::string&) { return false; };
+
+void testUninstallRefusesWhenRunning() {
+    UninstallFixture f;
+    f.touch(f.lib / "Caches/com.foo.app/a");
+    TrashRecorder rec;
+    std::string refusal;
+    auto r = un::uninstall(f.env, f.foo(), un::findLeftovers(f.env, f.foo()), rec.fn(),
+                           [](const std::string&) { return true; }, &refusal);
+    CHECK(r.empty());
+    CHECK_EQ(refusal, std::string("Quit Foo first"));
+    CHECK(rec.calls.empty());
+}
+
+void testUninstallOrderAndSkips() {
+    UninstallFixture f;
+    f.touch(f.lib / "Application Support/Foo/a");
+    f.touch(f.lib / "Preferences/com.foo.app.plist");
+    fs::create_directories(f.tree.outside() / "target");
+    fs::create_directories(f.lib / "Caches");
+    std::error_code ec;
+    fs::create_directory_symlink(f.tree.outside() / "target", f.lib / "Caches/com.foo.app", ec);
+    f.touch(f.sys / "Application Support/Foo/a");
+    f.notOwned.insert((f.sys / "Application Support/Foo").string());
+    auto items = un::findLeftovers(f.env, f.foo());
+    CHECK(hasLeftover(items, f.sys / "Application Support/Foo", un::LeftoverKind::Support));
+    TrashRecorder rec;
+    std::string refusal;
+    auto r = un::uninstall(f.env, f.foo(), items, rec.fn(), kNotRunning, &refusal);
+    CHECK(refusal.empty());
+    CHECK(!rec.calls.empty());
+    if (!rec.calls.empty()) CHECK_EQ(rec.calls.back(), (f.apps / "Foo.app").string());
+    for (const auto& c : rec.calls) CHECK(c.find(f.sys.string()) == std::string::npos);
+    CHECK_EQ(rec.calls.size(), 3u); // Application Support/Foo, the plist, the bundle
+    bool sawSymlinkFailure = false;
+    for (const auto& x : r) {
+        CHECK(x.path.find(f.sys.string()) == std::string::npos);
+        if (x.path == (f.lib / "Caches/com.foo.app").string()) {
+            sawSymlinkFailure = !x.ok && !x.error.empty();
+        }
+    }
+    CHECK(sawSymlinkFailure);
+    CHECK(r.back().ok);
+    CHECK(fs::exists(f.tree.outside() / "target"));
+}
+
+void testUninstallMissingItemIsSuccess() {
+    UninstallFixture f;
+    un::Leftover gone;
+    gone.path = (f.lib / "Caches/com.foo.app").string();
+    gone.kind = un::LeftoverKind::Cache;
+    TrashRecorder rec;
+    auto r = un::uninstall(f.env, f.foo(), {gone}, rec.fn(), kNotRunning, nullptr);
+    CHECK_EQ(r.size(), 1u);
+    if (r.size() == 1) CHECK(r[0].ok);
+    CHECK(rec.calls.empty());
+}
+
+void testUninstallRefusesAppleSigned() {
+    UninstallFixture f;
+    un::AppInfo app = f.foo();
+    app.appleSigned = true;
+    TrashRecorder rec;
+    std::string refusal;
+    auto r = un::uninstall(f.env, app, un::findLeftovers(f.env, app), rec.fn(), kNotRunning, &refusal);
+    CHECK(r.empty());
+    CHECK(!refusal.empty());
+    CHECK(rec.calls.empty());
+}
+
+void testUninstallDefaultEnvironmentFolders() {
+    auto env = un::defaultEnvironment();
+    CHECK_EQ(env.appFolders.size(), 2u);
+    if (env.appFolders.size() == 2) {
+        CHECK_EQ(env.appFolders[0], std::string("/Applications"));
+        CHECK_EQ(env.appFolders[1], env.home + "/Applications");
+    }
+    CHECK(env.readApp && env.ownedByUser && env.readLaunchAgent);
+}
+
 void testUninstallSafetyAcceptsBundle() {
     ScratchTree tree;
     const fs::path apps = tree.root() / "apps";
@@ -3350,6 +3440,11 @@ int main() {
     testUninstallerLaunchAgentByProgram();
     testUninstallerSystemLibraryNeedsAdmin();
     testUninstallerUnrelatedFilesUntouched();
+    testUninstallRefusesWhenRunning();
+    testUninstallOrderAndSkips();
+    testUninstallMissingItemIsSuccess();
+    testUninstallRefusesAppleSigned();
+    testUninstallDefaultEnvironmentFolders();
     testUninstallSafetyAcceptsBundle();
     testUninstallSafetyRejects();
     testUninstallSafetyKeepsHardDenylist();

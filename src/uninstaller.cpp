@@ -1,11 +1,13 @@
 #include "maccleaner/uninstaller.hpp"
 
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
 
+#include "maccleaner/processes.hpp"
 #include "maccleaner/scanner.hpp"
 
 namespace maccleaner::uninstaller {
@@ -163,6 +165,63 @@ std::vector<Leftover> findLeftovers(const Environment& env, const AppInfo& app) 
     for (const auto& l : system) scan(sysLib / l.dir, l.kind, l.match);
 
     return out;
+}
+
+bool isAppRunning(const std::string& appPath) {
+    const std::string prefix = appPath + "/";
+    for (const auto& p : sampleProcesses(::getuid()))
+        if (p.path.compare(0, prefix.size(), prefix) == 0) return true;
+    return false;
+}
+
+safety::AllowedRoots leftoverRoots(const Environment& env) {
+    safety::AllowedRoots roots;
+    const fs::path lib = fs::path(env.home) / "Library";
+    for (const char* d : {"Application Support", "Caches", "Preferences", "Containers", "Group Containers",
+                          "Saved Application State", "Logs", "HTTPStorages", "WebKit", "Cookies", "LaunchAgents"})
+        roots.add(lib / d);
+    return roots;
+}
+
+std::vector<RemovalResult> uninstall(const Environment& env, const AppInfo& app,
+                                     const std::vector<Leftover>& selected, const TrashFn& trash,
+                                     const RunningFn& running, std::string* refusal) {
+    const auto refuse = [&](const std::string& why) {
+        if (refusal != nullptr) *refusal = why;
+        return std::vector<RemovalResult>{};
+    };
+    if (app.appleSigned) return refuse("Refusing to uninstall an Apple-signed app");
+    if (running(app.path)) return refuse("Quit " + app.name + " first");
+
+    std::vector<fs::path> folders;
+    for (const auto& f : env.appFolders) folders.emplace_back(f);
+    const safety::AllowedRoots roots = leftoverRoots(env);
+
+    const auto remove = [&](const Leftover& row) {
+        RemovalResult r{row.path, false, {}};
+        struct stat st {};
+        if (::lstat(row.path.c_str(), &st) != 0) { // already gone counts as done
+            r.ok = true;
+            return r;
+        }
+        const bool bundle = row.kind == LeftoverKind::AppBundle;
+        if (bundle && row.path != app.path) {
+            r.error = "Not the selected app's bundle";
+        } else if (bundle ? !safety::isSafeToUninstall(row.path, folders, &r.error)
+                          : !safety::isSafeToDelete(row.path, roots, &r.error)) {
+            // r.error filled by the safety check
+        } else {
+            r.ok = trash(row.path, r.error);
+        }
+        return r;
+    };
+
+    std::vector<RemovalResult> results;
+    for (const auto& row : selected)
+        if (!row.needsAdmin && row.kind != LeftoverKind::AppBundle) results.push_back(remove(row));
+    for (const auto& row : selected)
+        if (!row.needsAdmin && row.kind == LeftoverKind::AppBundle) results.push_back(remove(row));
+    return results;
 }
 
 } // namespace maccleaner::uninstaller

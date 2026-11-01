@@ -63,10 +63,10 @@ else()
 endif()
 if(APPLE)
     list(APPEND MACCLEANER_APPLE_SOURCES src/platform/image_mac.mm src/platform/organizer_mac.mm
-        src/platform/malware_mac.mm src/platform/updater_mac.mm)
+        src/platform/malware_mac.mm src/platform/updater_mac.mm src/platform/uninstaller_mac.mm)
 else()
     list(APPEND MACCLEANER_APPLE_SOURCES src/platform/image_fallback.cpp src/platform/organizer_fallback.cpp
-        src/platform/malware_fallback.cpp src/platform/updater_fallback.cpp)
+        src/platform/malware_fallback.cpp src/platform/updater_fallback.cpp src/platform/uninstaller_fallback.cpp)
 endif()
 
 add_library(maccleaner_core STATIC
@@ -103,7 +103,7 @@ if(APPLE)
         ${FOUNDATION_FRAMEWORK} ${IMAGEIO_FRAMEWORK} ${COREGRAPHICS_FRAMEWORK} ${IOKIT_FRAMEWORK}
         ${AVFOUNDATION_FRAMEWORK} ${VISION_FRAMEWORK} ${MAPKIT_FRAMEWORK} ${CORELOCATION_FRAMEWORK} ${SECURITY_FRAMEWORK})
     set_source_files_properties(src/platform/image_mac.mm src/platform/organizer_mac.mm src/platform/malware_mac.mm
-        src/platform/updater_mac.mm PROPERTIES
+        src/platform/updater_mac.mm src/platform/uninstaller_mac.mm PROPERTIES
         COMPILE_FLAGS "-fobjc-arc"
     )
 endif()

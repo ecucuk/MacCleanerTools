@@ -39,6 +39,12 @@ struct CleanReport {
 // the only delete that makes sense there is a permanent one.
 bool requiresPermanentDelete(Category category);
 
+// True for categories whose contents their owners regenerate on demand
+// (caches, logs, build products), so Smart Optimize may pre-select them.
+// Archives, device support and the Trash stay opt-in: the first cannot be
+// rebuilt, the second is slow to download again, the third deletes for good.
+bool isRecommendedForAutoClean(Category category);
+
 // Cleans every entry in `result`. Each entry is independently re-validated
 // against `allowed` immediately before deletion (not just at scan time) --
 // scans and cleans can be arbitrarily far apart in time (interactive CLI use),

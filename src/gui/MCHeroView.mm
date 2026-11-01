@@ -8,6 +8,9 @@ constexpr CGFloat kOrbDiameter = 124;
 constexpr CGFloat kRingRadius = 76;
 NSString *const kSpinKey = @"spin";
 NSString *const kPulseKey = @"pulse";
+NSString *const kOrbitKey = @"orbit";
+constexpr CGFloat kOrbitRadius = 92;
+constexpr CGFloat kDotDiameter = 7;
 
 NSTextField *whiteLabel(NSString *text, NSFont *font, CGFloat alpha) {
     NSTextField *label = [NSTextField labelWithString:text];
@@ -32,6 +35,8 @@ NSTextField *whiteLabel(NSString *text, NSFont *font, CGFloat alpha) {
 @property(nonatomic, strong) CAGradientLayer *orb;
 @property(nonatomic, strong) CAShapeLayer *track;
 @property(nonatomic, strong) CAShapeLayer *ring;
+/// Three glowing dots, 120° apart, circling the orb while a scan runs.
+@property(nonatomic, strong) CALayer *orbit;
 @property(nonatomic, strong) NSImageView *symbol;
 - (void)setSpinning:(BOOL)spinning;
 @end
@@ -71,7 +76,21 @@ NSTextField *whiteLabel(NSString *text, NSFont *font, CGFloat alpha) {
         _ring.lineCap = kCALineCapRound;
         _ring.strokeEnd = 0.28;
 
-        for (CALayer *layer in @[ _glow, _orb, _track, _ring ]) {
+        _orbit = [CALayer layer];
+        for (int i = 0; i < 3; ++i) {
+            CALayer *dot = [CALayer layer];
+            dot.bounds = CGRectMake(0, 0, kDotDiameter, kDotDiameter);
+            dot.cornerRadius = kDotDiameter / 2;
+            dot.backgroundColor = NSColor.whiteColor.CGColor;
+            dot.shadowColor = NSColor.whiteColor.CGColor;
+            dot.shadowOpacity = 0.9f;
+            dot.shadowRadius = 5;
+            dot.shadowOffset = CGSizeZero;
+            dot.opacity = 1.0f - 0.25f * static_cast<float>(i);
+            [_orbit addSublayer:dot];
+        }
+
+        for (CALayer *layer in @[ _glow, _orb, _track, _ring, _orbit ]) {
             [self.layer addSublayer:layer];
         }
 
@@ -112,6 +131,12 @@ NSTextField *whiteLabel(NSString *text, NSFont *font, CGFloat alpha) {
         layer.path = path;
         CGPathRelease(path);
     }
+    self.orbit.bounds = b;
+    self.orbit.position = center;
+    [self.orbit.sublayers enumerateObjectsUsingBlock:^(CALayer *dot, NSUInteger i, BOOL *) {
+        const CGFloat angle = M_PI_2 + static_cast<CGFloat>(i) * 2 * M_PI / 3;
+        dot.position = CGPointMake(center.x + kOrbitRadius * cos(angle), center.y + kOrbitRadius * sin(angle));
+    }];
     [CATransaction commit];
 }
 
@@ -120,6 +145,8 @@ NSTextField *whiteLabel(NSString *text, NSFont *font, CGFloat alpha) {
     self.ring.hidden = !spinning;
     [self.ring removeAnimationForKey:kSpinKey];
     [self.orb removeAnimationForKey:kPulseKey];
+    [self.orbit removeAnimationForKey:kOrbitKey];
+    self.orbit.hidden = YES;
     if (!spinning || NSWorkspace.sharedWorkspace.accessibilityDisplayShouldReduceMotion) {
         return; // Reduce Motion: the ring stands still
     }
@@ -138,6 +165,14 @@ NSTextField *whiteLabel(NSString *text, NSFont *font, CGFloat alpha) {
     pulse.repeatCount = HUGE_VALF;
     pulse.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
     [self.orb addAnimation:pulse forKey:kPulseKey];
+
+    self.orbit.hidden = NO;
+    CABasicAnimation *orbit = [CABasicAnimation animationWithKeyPath:@"transform.rotation.z"];
+    orbit.fromValue = @0;
+    orbit.toValue = @(2 * M_PI); // against the ring, so the two read as separate motions
+    orbit.duration = 3;
+    orbit.repeatCount = HUGE_VALF;
+    [self.orbit addAnimation:orbit forKey:kOrbitKey];
 }
 
 @end
@@ -164,7 +199,7 @@ NSTextField *whiteLabel(NSString *text, NSFont *font, CGFloat alpha) {
     if ((self = [super initWithFrame:NSZeroRect])) {
         self.translatesAutoresizingMaskIntoConstraints = NO;
         self.wantsLayer = YES;
-        _background = [MCTheme gradientLayerForTool:tool];
+        _background = [MCTheme auroraLayerForTool:tool];
         [self.layer insertSublayer:_background atIndex:0];
 
         _emblem = [[MCEmblemView alloc] initWithSymbol:symbolName];
@@ -253,9 +288,19 @@ NSTextField *whiteLabel(NSString *text, NSFont *font, CGFloat alpha) {
 }
 
 - (void)setPresented:(BOOL)presented {
+    const BOOL changed = _presented != presented;
     _presented = presented;
     for (NSView *sibling in self.superview.subviews) {
+        const BOOL wasHidden = sibling.hidden;
         sibling.hidden = (sibling == self) ? !presented : presented;
+        if (changed && wasHidden && !sibling.hidden && !MCTheme.reduceMotion) {
+            // Crossfade: whatever just appeared fades in over the old screen.
+            sibling.alphaValue = 0;
+            [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
+                context.duration = 0.3;
+                sibling.animator.alphaValue = 1;
+            }];
+        }
     }
     if (!presented) {
         self.scanning = NO;

@@ -203,6 +203,8 @@ if(APPLE AND MACCLEANER_BUILD_GUI)
         src/gui/MCUninstallerModel.mm
         src/gui/MCMainWindowController.mm
         src/gui/MCHomeViewController.mm
+        src/gui/MCSmartOptimizer.mm
+        src/gui/MCSmartReviewController.mm
         src/gui/MCSplashWindow.mm
         src/gui/MCCleanerViewController.mm
         src/gui/MCLargeFilesViewController.mm

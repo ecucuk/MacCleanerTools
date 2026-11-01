@@ -12,6 +12,24 @@ bool requiresPermanentDelete(Category category) {
     return category == Category::Trash;
 }
 
+bool isRecommendedForAutoClean(Category category) {
+    switch (category) {
+        case Category::UserCaches:
+        case Category::UserLogs:
+        case Category::DiagnosticReports:
+        case Category::XcodeDerivedData:
+        case Category::SimulatorCaches:
+        case Category::HomebrewCache:
+        case Category::NpmCache:
+        case Category::YarnCache:
+        case Category::PipCache: return true;
+        case Category::XcodeArchives:
+        case Category::XcodeDeviceSupport:
+        case Category::Trash: return false;
+    }
+    return false;
+}
+
 CleanReport clean(const ScanResult& result, const safety::AllowedRoots& allowed, const CleanOptions& options) {
     CleanReport report;
     report.outcomes.reserve(result.entries.size());

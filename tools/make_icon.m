@@ -6,10 +6,14 @@
 //   cc -fobjc-arc -framework AppKit tools/make_icon.m -o make_icon
 //   ./make_icon /path/to/icon_1024.png
 //
-// Design: a blue-to-teal tile with a large four-point sparkle and two small
-// companions -- "sparkling clean" -- which stays legible down to the 16pt
-// menu-bar size where a detailed broom would turn to mush. Plain
-// Objective-C rather than Swift so it builds with nothing but clang.
+// Design: an indigo-to-cyan tile with a large four-point sparkle and two
+// small companions -- "sparkling clean" -- which stays legible down to the
+// 16pt menu-bar size where a detailed broom would turn to mush. Layered in
+// the macOS 26 manner: a soft drop shadow under the tile, an aurora glow
+// and a glass reflection on it, a bright inner rim, and sparkles that sit
+// above the tile as frosted glass (ice-blue gradient, specular edge,
+// coloured shadow). Plain Objective-C rather than Swift so it builds with
+// nothing but clang.
 
 #import <AppKit/AppKit.h>
 
@@ -31,17 +35,38 @@ static CGPathRef CreateSparkle(CGPoint c, CGFloat r) {
     return p;
 }
 
-static void DrawSparkle(CGContextRef ctx, CGPoint c, CGFloat r) {
-    CGContextSaveGState(ctx);
-    CGColorRef shadow = CGColorCreateGenericRGB(0, 0.15, 0.4, 0.35);
-    CGContextSetShadowWithColor(ctx, CGSizeMake(0, -r * 0.06), r * 0.18, shadow);
+static void DrawSparkle(CGContextRef ctx, CGColorSpaceRef space, CGPoint c, CGFloat r) {
     CGPathRef path = CreateSparkle(c, r);
+
+    // Body with a deep-blue shadow, so it floats above the tile.
+    CGContextSaveGState(ctx);
+    CGColorRef shadow = CGColorCreateGenericRGB(0x1e / 255.0, 0x3a / 255.0, 0x8a / 255.0, 0.45);
+    CGContextSetShadowWithColor(ctx, CGSizeMake(0, -r * 0.08), r * 0.22, shadow);
     CGContextAddPath(ctx, path);
     CGContextSetRGBFillColor(ctx, 1, 1, 1, 1);
     CGContextFillPath(ctx);
-    CGPathRelease(path);
     CGColorRelease(shadow);
     CGContextRestoreGState(ctx);
+
+    // Frosted fill: white at the top to ice blue (#dbeafe) at the bottom.
+    CGContextSaveGState(ctx);
+    CGContextAddPath(ctx, path);
+    CGContextClip(ctx);
+    const CGFloat ice[] = {1, 1, 1, 1, 0xdb / 255.0, 0xea / 255.0, 0xfe / 255.0, 1};
+    const CGFloat stops[] = {0, 1};
+    CGGradientRef fill = CGGradientCreateWithColorComponents(space, ice, stops, 2);
+    CGContextDrawLinearGradient(ctx, fill, CGPointMake(c.x, c.y + r), CGPointMake(c.x, c.y - r), 0);
+    CGGradientRelease(fill);
+    CGContextRestoreGState(ctx);
+
+    // Specular edge.
+    CGContextSaveGState(ctx);
+    CGContextAddPath(ctx, path);
+    CGContextSetRGBStrokeColor(ctx, 1, 1, 1, 0.8);
+    CGContextSetLineWidth(ctx, MAX(2, r * 0.02));
+    CGContextStrokePath(ctx);
+    CGContextRestoreGState(ctx);
+    CGPathRelease(path);
 }
 
 int main(int argc, const char *argv[]) {
@@ -64,36 +89,81 @@ int main(int argc, const char *argv[]) {
         const CGFloat radius = kTile * kCornerRatio;
         CGPathRef tilePath = CGPathCreateWithRoundedRect(tileRect, radius, radius, NULL);
 
-        // --- tile: diagonal gradient, deep blue to teal --------------------
+        const CGFloat stops2[] = {0, 1};
+
+        // --- drop shadow under the tile, inside the canvas -----------------
+        CGContextSaveGState(ctx);
+        CGColorRef tileShadow = CGColorCreateGenericRGB(0, 0, 0, 0.35);
+        CGContextSetShadowWithColor(ctx, CGSizeMake(0, -kTile * 0.012), kTile * 0.03, tileShadow);
+        CGContextAddPath(ctx, tilePath);
+        CGContextSetRGBFillColor(ctx, 0.26, 0.22, 0.79, 1);
+        CGContextFillPath(ctx);
+        CGColorRelease(tileShadow);
+        CGContextRestoreGState(ctx);
+
+        // --- tile: diagonal gradient, indigo -> blue -> cyan ---------------
         CGContextSaveGState(ctx);
         CGContextAddPath(ctx, tilePath);
         CGContextClip(ctx);
 
         const CGFloat gradientComponents[] = {
-            0.11, 0.36, 0.93, 1.0, // deep blue (top-left)
-            0.13, 0.71, 0.87, 1.0, // teal (bottom-right)
+            0x43 / 255.0, 0x38 / 255.0, 0xca / 255.0, 1.0, // indigo (top-left)
+            0x25 / 255.0, 0x63 / 255.0, 0xeb / 255.0, 1.0, // blue
+            0x08 / 255.0, 0x91 / 255.0, 0xb2 / 255.0, 1.0, // cyan (bottom-right)
         };
-        const CGFloat stops[] = {0, 1};
-        CGGradientRef gradient = CGGradientCreateWithColorComponents(space, gradientComponents, stops, 2);
+        const CGFloat stops3[] = {0, 0.5, 1};
+        CGGradientRef gradient = CGGradientCreateWithColorComponents(space, gradientComponents, stops3, 3);
         CGContextDrawLinearGradient(ctx, gradient,
                                     CGPointMake(CGRectGetMinX(tileRect), CGRectGetMaxY(tileRect)),
                                     CGPointMake(CGRectGetMaxX(tileRect), CGRectGetMinY(tileRect)), 0);
         CGGradientRelease(gradient);
 
-        // A soft radial highlight in the upper-left gives the flat gradient
-        // some depth without resorting to skeuomorphic gloss.
-        const CGFloat highlightComponents[] = {1, 1, 1, 0.22, 1, 1, 1, 0};
-        CGGradientRef highlight = CGGradientCreateWithColorComponents(space, highlightComponents, stops, 2);
-        const CGPoint hc = CGPointMake(CGRectGetMinX(tileRect) + kTile * 0.3, CGRectGetMaxY(tileRect) - kTile * 0.25);
-        CGContextDrawRadialGradient(ctx, highlight, hc, 0, hc, kTile * 0.7, 0);
-        CGGradientRelease(highlight);
+        // Aurora: a cyan glow top-left and a violet one bottom-right, the
+        // same drifting blobs the app draws behind its screens.
+        typedef struct {
+            CGFloat x, y, r, g, b;
+        } Blob;
+        const Blob blobs[] = {{0.25, 0.80, 0.13, 0.83, 0.93}, {0.85, 0.15, 0.66, 0.33, 0.97}};
+        for (size_t i = 0; i < sizeof blobs / sizeof blobs[0]; ++i) {
+            const Blob blob = blobs[i];
+            const CGFloat components[] = {blob.r, blob.g, blob.b, 0.45, blob.r, blob.g, blob.b, 0};
+            CGGradientRef glow = CGGradientCreateWithColorComponents(space, components, stops2, 2);
+            const CGPoint bc = CGPointMake(CGRectGetMinX(tileRect) + kTile * blob.x,
+                                           CGRectGetMinY(tileRect) + kTile * blob.y);
+            CGContextDrawRadialGradient(ctx, glow, bc, 0, bc, kTile * 0.55, 0);
+            CGGradientRelease(glow);
+        }
+
+        // Glass reflection over the top half.
+        const CGFloat shine[] = {1, 1, 1, 0.22, 1, 1, 1, 0};
+        CGGradientRef reflection = CGGradientCreateWithColorComponents(space, shine, stops2, 2);
+        CGContextDrawLinearGradient(ctx, reflection, CGPointMake(0, CGRectGetMaxY(tileRect)),
+                                    CGPointMake(0, CGRectGetMidY(tileRect)), 0);
+        CGGradientRelease(reflection);
+        CGContextRestoreGState(ctx);
+
+        // Inner rim: bright at the top, faint at the bottom.
+        CGContextSaveGState(ctx);
+        const CGFloat rimWidth = kTile * 0.0035;
+        CGPathRef rimPath = CGPathCreateWithRoundedRect(CGRectInset(tileRect, rimWidth / 2, rimWidth / 2),
+                                                        radius - rimWidth / 2, radius - rimWidth / 2, NULL);
+        CGContextAddPath(ctx, rimPath);
+        CGContextSetLineWidth(ctx, rimWidth);
+        CGContextReplacePathWithStrokedPath(ctx);
+        CGContextClip(ctx);
+        const CGFloat rim[] = {1, 1, 1, 0.5, 1, 1, 1, 0.1};
+        CGGradientRef rimGradient = CGGradientCreateWithColorComponents(space, rim, stops2, 2);
+        CGContextDrawLinearGradient(ctx, rimGradient, CGPointMake(0, CGRectGetMaxY(tileRect)),
+                                    CGPointMake(0, CGRectGetMinY(tileRect)), 0);
+        CGGradientRelease(rimGradient);
+        CGPathRelease(rimPath);
         CGContextRestoreGState(ctx);
 
         // --- sparkles ----------------------------------------------------
         const CGPoint centre = CGPointMake(kCanvas / 2, kCanvas / 2);
-        DrawSparkle(ctx, CGPointMake(centre.x - kTile * 0.04, centre.y - kTile * 0.03), kTile * 0.30);
-        DrawSparkle(ctx, CGPointMake(centre.x + kTile * 0.25, centre.y + kTile * 0.24), kTile * 0.11);
-        DrawSparkle(ctx, CGPointMake(centre.x + kTile * 0.30, centre.y - kTile * 0.20), kTile * 0.065);
+        DrawSparkle(ctx, space, CGPointMake(centre.x - kTile * 0.04, centre.y - kTile * 0.03), kTile * 0.30);
+        DrawSparkle(ctx, space, CGPointMake(centre.x + kTile * 0.25, centre.y + kTile * 0.24), kTile * 0.11);
+        DrawSparkle(ctx, space, CGPointMake(centre.x + kTile * 0.30, centre.y - kTile * 0.20), kTile * 0.065);
 
         // --- write PNG ---------------------------------------------------
         CGImageRef image = CGBitmapContextCreateImage(ctx);

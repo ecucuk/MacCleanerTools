@@ -17,7 +17,7 @@
         self.wantsLayer = YES;
         self.layer.cornerRadius = 14;
         self.layer.masksToBounds = YES;
-        _background = [MCTheme gradientLayerForTool:tool];
+        _background = [MCTheme auroraLayerForTool:tool];
         [self.layer insertSublayer:_background atIndex:0];
 
         // A frosted disc with the white symbol: the badge's own gradient
@@ -51,18 +51,38 @@
         _captionLabel = [NSTextField labelWithString:@""];
         _captionLabel.textColor = [NSColor colorWithWhite:1 alpha:0.85];
         _captionLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
-        // Captions carry paths: truncate, never widen the window.
-        [_captionLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+        // Captions carry paths: truncate, never widen the window. One above
+        // the row stack's own hugging (DefaultLow), so the spare width goes
+        // to the caption before the spacer.
+        [_captionLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow + 1
                                                 forOrientation:NSLayoutConstraintOrientationHorizontal];
 
         NSStackView *text = [NSStackView stackViewWithViews:@[ _valueLabel, _captionLabel ]];
         text.orientation = NSUserInterfaceLayoutOrientationVertical;
         text.alignment = NSLayoutAttributeLeading;
         text.spacing = 0;
-        [text setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow
+        [text setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow + 1
                                        forOrientation:NSLayoutConstraintOrientationHorizontal];
-        // The text takes the spare width, which pushes the actions right.
-        [text setHuggingPriority:NSLayoutPriorityDefaultLow - 1 forOrientation:NSLayoutConstraintOrientationHorizontal];
+        text.translatesAutoresizingMaskIntoConstraints = NO;
+        NSView *plate = [[NSView alloc] initWithFrame:NSZeroRect];
+        [plate addSubview:text];
+        [NSLayoutConstraint activateConstraints:@[
+            [text.leadingAnchor constraintEqualToAnchor:plate.leadingAnchor constant:14],
+            [text.trailingAnchor constraintEqualToAnchor:plate.trailingAnchor constant:-14],
+            [text.topAnchor constraintEqualToAnchor:plate.topAnchor constant:6],
+            [text.bottomAnchor constraintEqualToAnchor:plate.bottomAnchor constant:-6],
+        ]];
+        // The number sits on a glass plate as wide as its text; a spacer
+        // takes the spare width and pushes the actions right.
+        NSView *glass = [MCTheme glassViewWithCornerRadius:12 content:plate];
+        [glass setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow + 1
+                                        forOrientation:NSLayoutConstraintOrientationHorizontal];
+        NSView *spacer = [[NSView alloc] initWithFrame:NSZeroRect];
+        // A plain view has no intrinsic width, so hugging does nothing: ask
+        // for zero width at the lowest priority instead, after the text.
+        NSLayoutConstraint *collapse = [spacer.widthAnchor constraintEqualToConstant:0];
+        collapse.priority = NSLayoutPriorityFittingSizeCompression;
+        collapse.active = YES;
 
         _actionsStack = [NSStackView stackViewWithViews:@[]];
         _actionsStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
@@ -70,7 +90,7 @@
         [_actionsStack setContentHuggingPriority:NSLayoutPriorityRequired
                                   forOrientation:NSLayoutConstraintOrientationHorizontal];
 
-        NSStackView *row = [NSStackView stackViewWithViews:@[ badge, text, _actionsStack ]];
+        NSStackView *row = [NSStackView stackViewWithViews:@[ badge, glass, spacer, _actionsStack ]];
         row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
         row.alignment = NSLayoutAttributeCenterY;
         row.spacing = 14;

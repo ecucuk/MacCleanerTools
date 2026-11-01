@@ -10,7 +10,6 @@
 
 namespace {
 
-NSString *const kSymbol = @"trash.square";
 NSString *const kAppColumn = @"app";
 NSString *const kVersionColumn = @"version";
 NSString *const kSizeColumn = @"size";
@@ -138,11 +137,11 @@ NSScrollView *cardFor(NSTableView *table) {
                                                   tool:MCToolUninstaller target:self action:@selector(scan:)];
     self.uninstallButton = [MCGlassButton buttonWithTitle:@"Uninstall" style:MCGlassButtonStylePillPrimary
                                                      tool:MCToolUninstaller target:self action:@selector(uninstall:)];
-    self.banner = [[MCToolBanner alloc] initWithTool:MCToolUninstaller symbol:kSymbol];
+    self.banner = [[MCToolBanner alloc] initWithTool:MCToolUninstaller symbol:[MCTheme symbolForTool:MCToolUninstaller]];
     self.banner.actions = @[ self.rescanButton, self.uninstallButton ];
 
     self.hero = [[MCHeroView alloc] initWithTool:MCToolUninstaller
-                                          symbol:kSymbol
+                                          symbol:[MCTheme symbolForTool:MCToolUninstaller]
                                            title:@"Uninstaller"
                                         subtitle:@"Remove apps together with their support files, caches and preferences."];
     self.hero.actions = @[ [MCGlassButton buttonWithTitle:@"Scan" style:MCGlassButtonStyleRound

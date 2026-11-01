@@ -2997,7 +2997,7 @@ struct UninstallFixture {
             un::AppInfo a;
             a.path = path;
             const std::string file = fs::path(path).filename().string();
-            if (file == "Foo.app") {
+            if (file == "Foo.app" || file == "link.app") {
                 a.name = "Foo"; a.bundleId = "com.foo.app"; a.teamId = "TEAM1"; a.appGroups = {"group.com.foo"};
             } else if (file == "Bar.app") {
                 a.name = "Bar"; a.bundleId = "com.bar.app";

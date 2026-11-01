@@ -2,6 +2,7 @@
 #include "maccleaner/cleaner.hpp"
 #include "maccleaner/cli.hpp"
 #include "maccleaner/format.hpp"
+#include "maccleaner/http.hpp"
 #include "maccleaner/malware.hpp"
 #include "maccleaner/optimizer.hpp"
 #include "maccleaner/organizer.hpp"
@@ -9,6 +10,7 @@
 #include "maccleaner/processes.hpp"
 #include "maccleaner/safety.hpp"
 #include "maccleaner/scanner.hpp"
+#include "maccleaner/selfupdate.hpp"
 #include "maccleaner/trash.hpp"
 #include "maccleaner/uninstaller.hpp"
 #include "maccleaner/updater.hpp"
@@ -651,6 +653,36 @@ int runUpdates(const CliOptions& options) {
     return 0;
 }
 
+int runCheckUpdate() {
+    const auto response = http::get(std::string(selfupdate::kLatestReleaseUrl),
+                                    {{"Accept", "application/vnd.github+json"},
+                                     {"User-Agent", "mac_cleaner/" MACCLEANER_VERSION}},
+                                    10);
+    if (!response) {
+        std::cerr << "error: could not reach GitHub\n";
+        return 1;
+    }
+    if (response->status == 404) { // the repo has no published release yet
+        std::cout << "up to date (no release published)\n";
+        return 0;
+    }
+    if (response->status == 403 || response->status == 429) {
+        std::cerr << "error: GitHub rate limit reached, try again later\n";
+        return 1;
+    }
+    const auto release = response->status == 200 ? selfupdate::parseLatestRelease(response->body) : std::nullopt;
+    if (!release) {
+        std::cerr << "error: could not read the release information (HTTP " << response->status << ")\n";
+        return 1;
+    }
+    if (selfupdate::isNewer(release->version, MACCLEANER_VERSION)) {
+        std::cout << "new version " << release->version << ": " << release->pageUrl << "\n";
+    } else {
+        std::cout << "up to date (" << MACCLEANER_VERSION << ")\n";
+    }
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -687,6 +719,11 @@ int main(int argc, char** argv) {
             return runUpdates(options);
         case Command::Uninstall:
             return runUninstall(options);
+        case Command::Version:
+            std::cout << "mac_cleaner " << MACCLEANER_VERSION << "\n";
+            return 0;
+        case Command::CheckUpdate:
+            return runCheckUpdate();
     }
     return 0;
 }

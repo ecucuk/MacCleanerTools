@@ -3373,6 +3373,15 @@ void testSelfUpdateIsNewer() {
     CHECK(!isNewer("0.1.0", "0.2.0"));
 }
 
+void testCliVersionAndCheckUpdate() {
+    CliParseError error;
+    auto v = parse({"mac_cleaner", "--version"}, error);
+    CHECK(v.has_value() && v->command == maccleaner::Command::Version);
+    auto c = parse({"mac_cleaner", "check-update"}, error);
+    CHECK(c.has_value() && c->command == maccleaner::Command::CheckUpdate);
+    CHECK(!parse({"mac_cleaner", "check-update", "--apply"}, error).has_value());
+}
+
 int main() {
     testHumanReadableBytes();
 
@@ -3571,6 +3580,7 @@ int main() {
     testSelfUpdateParsesRelease();
     testSelfUpdateRejectsBadRelease();
     testSelfUpdateIsNewer();
+    testCliVersionAndCheckUpdate();
 
     if (g_failures == 0) {
         std::cout << "All tests passed.\n";

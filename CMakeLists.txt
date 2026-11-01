@@ -64,10 +64,10 @@ else()
 endif()
 if(APPLE)
     list(APPEND MACCLEANER_APPLE_SOURCES src/platform/image_mac.mm src/platform/organizer_mac.mm
-        src/platform/malware_mac.mm src/platform/updater_mac.mm src/platform/uninstaller_mac.mm)
+        src/platform/malware_mac.mm src/platform/updater_mac.mm src/platform/uninstaller_mac.mm src/platform/http_mac.mm)
 else()
     list(APPEND MACCLEANER_APPLE_SOURCES src/platform/image_fallback.cpp src/platform/organizer_fallback.cpp
-        src/platform/malware_fallback.cpp src/platform/updater_fallback.cpp src/platform/uninstaller_fallback.cpp)
+        src/platform/malware_fallback.cpp src/platform/updater_fallback.cpp src/platform/uninstaller_fallback.cpp src/platform/http_fallback.cpp)
 endif()
 
 add_library(maccleaner_core STATIC
@@ -80,6 +80,7 @@ target_include_directories(maccleaner_core PUBLIC
 target_link_libraries(maccleaner_core PRIVATE maccleaner_warnings)
 target_compile_definitions(maccleaner_core PUBLIC
     MACCLEANER_NATIVE_TRASH=$<BOOL:$<AND:$<BOOL:${APPLE}>,$<BOOL:${MACCLEANER_USE_NATIVE_TRASH}>>>
+    MACCLEANER_VERSION="${PROJECT_VERSION}"
 )
 
 if(APPLE AND MACCLEANER_USE_NATIVE_TRASH)
@@ -104,7 +105,7 @@ if(APPLE)
         ${FOUNDATION_FRAMEWORK} ${IMAGEIO_FRAMEWORK} ${COREGRAPHICS_FRAMEWORK} ${IOKIT_FRAMEWORK}
         ${AVFOUNDATION_FRAMEWORK} ${VISION_FRAMEWORK} ${MAPKIT_FRAMEWORK} ${CORELOCATION_FRAMEWORK} ${SECURITY_FRAMEWORK})
     set_source_files_properties(src/platform/image_mac.mm src/platform/organizer_mac.mm src/platform/malware_mac.mm
-        src/platform/updater_mac.mm src/platform/uninstaller_mac.mm PROPERTIES
+        src/platform/updater_mac.mm src/platform/uninstaller_mac.mm src/platform/http_mac.mm PROPERTIES
         COMPILE_FLAGS "-fobjc-arc"
     )
 endif()

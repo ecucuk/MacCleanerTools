@@ -3097,7 +3097,7 @@ void testUninstallerFindsEachLocation() {
     };
     for (const auto& e : expected) f.touch(e.first);
 
-    auto r = un::findLeftovers(f.env, f.foo());
+    auto r = un::findLeftovers(f.env, f.foo(), {});
     CHECK(!r.empty());
     if (!r.empty()) {
         CHECK(r[0].kind == K::AppBundle);
@@ -3117,7 +3117,7 @@ void testUninstallerNameRuleIsExact() {
     app.path = (f.apps / "Foo.app").string();
     app.name = "Code";
     app.bundleId = "com.microsoft.VSCode";
-    auto r = un::findLeftovers(f.env, app);
+    auto r = un::findLeftovers(f.env, app, {});
     CHECK(!hasPath(r, f.lib / "Application Support/Xcode"));
     CHECK(!hasPath(r, f.lib / "Application Support/Code Helper"));
     CHECK(hasPath(r, f.lib / "Application Support/Code"));
@@ -3130,7 +3130,7 @@ void testUninstallerLaunchAgentByProgram() {
     f.touch(x);
     f.touch(y);
     f.agents[x.string()] = {"some.label", (f.apps / "Foo.app/Contents/MacOS/foo").string()};
-    auto r = un::findLeftovers(f.env, f.foo());
+    auto r = un::findLeftovers(f.env, f.foo(), {});
     CHECK(hasLeftover(r, x, un::LeftoverKind::LaunchAgent));
     CHECK(!hasPath(r, y));
 }
@@ -3140,7 +3140,7 @@ void testUninstallerSystemLibraryNeedsAdmin() {
     const fs::path d = f.sys / "LaunchDaemons/com.foo.app.helper.plist";
     f.touch(d);
     f.notOwned.insert(d.string());
-    auto r = un::findLeftovers(f.env, f.foo());
+    auto r = un::findLeftovers(f.env, f.foo(), {});
     bool found = false;
     for (const auto& l : r)
         if (l.path == d.string()) { found = true; CHECK(l.needsAdmin); }
@@ -3152,9 +3152,66 @@ void testUninstallerUnrelatedFilesUntouched() {
     UninstallFixture f;
     f.touch(f.lib / "Caches/com.foobar.app/a");
     f.touch(f.lib / "Application Support/Foobar/a");
-    auto r = un::findLeftovers(f.env, f.foo());
+    auto r = un::findLeftovers(f.env, f.foo(), {});
     CHECK(!hasPath(r, f.lib / "Caches/com.foobar.app"));
     CHECK(!hasPath(r, f.lib / "Application Support/Foobar"));
+}
+
+void testUninstallerSystemLibraryAlwaysNeedsAdmin() {
+    UninstallFixture f;
+    const fs::path d = f.sys / "Application Support/Foo";
+    f.touch(d / "a"); // owned by the user, still under /Library
+    auto r = un::findLeftovers(f.env, f.foo(), {});
+    bool found = false;
+    for (const auto& l : r)
+        if (l.path == d.string()) { found = true; CHECK(l.needsAdmin); }
+    CHECK(found);
+}
+
+void testUninstallerEmptyHomeFailsClosed() {
+    UninstallFixture f;
+    f.touch(f.lib / "Caches/com.foo.app/a");
+    f.env.home.clear();
+    auto r = un::findLeftovers(f.env, f.foo(), {});
+    CHECK_EQ(r.size(), 1u);
+    CHECK(!r.empty() && r[0].kind == un::LeftoverKind::AppBundle);
+    CHECK(un::leftoverRoots(f.env).roots().empty());
+}
+
+un::AppInfo fakeApp(const UninstallFixture& f, const std::string& file, const std::string& name, const std::string& id,
+                    std::vector<std::string> groups = {}) {
+    un::AppInfo a;
+    a.path = (f.apps / file).string();
+    a.name = name;
+    a.bundleId = id;
+    a.appGroups = std::move(groups);
+    return a;
+}
+
+void testUninstallerSkipsMoreSpecificSibling() {
+    UninstallFixture f;
+    f.touch(f.lib / "Caches/com.google.Chrome/a");
+    f.touch(f.lib / "Caches/com.google.Chrome.canary/a");
+    const auto chrome = fakeApp(f, "Chrome.app", "Google Chrome", "com.google.Chrome");
+    const auto canary = fakeApp(f, "Canary.app", "Google Chrome Canary", "com.google.Chrome.canary");
+    auto r = un::findLeftovers(f.env, chrome, {chrome, canary});
+    CHECK(hasPath(r, f.lib / "Caches/com.google.Chrome"));
+    CHECK(!hasPath(r, f.lib / "Caches/com.google.Chrome.canary"));
+    // Without the sibling installed, its data is an orphan and is still offered.
+    r = un::findLeftovers(f.env, chrome, {chrome});
+    CHECK(hasPath(r, f.lib / "Caches/com.google.Chrome.canary"));
+}
+
+void testUninstallerSkipsSharedAppGroup() {
+    UninstallFixture f;
+    f.touch(f.lib / "Group Containers/UBF8T346G9.Office/a");
+    f.touch(f.lib / "Group Containers/UBF8T346G9.Word/a");
+    const auto word = fakeApp(f, "Word.app", "Microsoft Word", "com.microsoft.Word",
+                              {"UBF8T346G9.Office", "UBF8T346G9.Word"});
+    const auto excel = fakeApp(f, "Excel.app", "Microsoft Excel", "com.microsoft.Excel", {"UBF8T346G9.Office"});
+    auto r = un::findLeftovers(f.env, word, {word, excel});
+    CHECK(!hasPath(r, f.lib / "Group Containers/UBF8T346G9.Office"));
+    CHECK(hasPath(r, f.lib / "Group Containers/UBF8T346G9.Word"));
 }
 
 struct TrashRecorder {
@@ -3174,7 +3231,7 @@ void testUninstallRefusesWhenRunning() {
     f.touch(f.lib / "Caches/com.foo.app/a");
     TrashRecorder rec;
     std::string refusal;
-    auto r = un::uninstall(f.env, f.foo(), un::findLeftovers(f.env, f.foo()), rec.fn(),
+    auto r = un::uninstall(f.env, f.foo(), un::findLeftovers(f.env, f.foo(), {}), rec.fn(),
                            [](const std::string&) { return true; }, &refusal);
     CHECK(r.empty());
     CHECK_EQ(refusal, std::string("Quit Foo first"));
@@ -3191,7 +3248,7 @@ void testUninstallOrderAndSkips() {
     fs::create_directory_symlink(f.tree.outside() / "target", f.lib / "Caches/com.foo.app", ec);
     f.touch(f.sys / "Application Support/Foo/a");
     f.notOwned.insert((f.sys / "Application Support/Foo").string());
-    auto items = un::findLeftovers(f.env, f.foo());
+    auto items = un::findLeftovers(f.env, f.foo(), {});
     CHECK(hasLeftover(items, f.sys / "Application Support/Foo", un::LeftoverKind::Support));
     TrashRecorder rec;
     std::string refusal;
@@ -3231,7 +3288,7 @@ void testUninstallRefusesAppleSigned() {
     app.appleSigned = true;
     TrashRecorder rec;
     std::string refusal;
-    auto r = un::uninstall(f.env, app, un::findLeftovers(f.env, app), rec.fn(), kNotRunning, &refusal);
+    auto r = un::uninstall(f.env, app, un::findLeftovers(f.env, app, {}), rec.fn(), kNotRunning, &refusal);
     CHECK(r.empty());
     CHECK(!refusal.empty());
     CHECK(rec.calls.empty());
@@ -3464,6 +3521,10 @@ int main() {
     testUninstallerLaunchAgentByProgram();
     testUninstallerSystemLibraryNeedsAdmin();
     testUninstallerUnrelatedFilesUntouched();
+    testUninstallerSystemLibraryAlwaysNeedsAdmin();
+    testUninstallerEmptyHomeFailsClosed();
+    testUninstallerSkipsMoreSpecificSibling();
+    testUninstallerSkipsSharedAppGroup();
     testUninstallRefusesWhenRunning();
     testUninstallOrderAndSkips();
     testUninstallMissingItemIsSuccess();

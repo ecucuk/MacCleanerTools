@@ -89,9 +89,10 @@ std::vector<AppInfo> listApps(const Environment& env) {
     return apps;
 }
 
-std::vector<Leftover> findLeftovers(const Environment& env, const AppInfo& app) {
+std::vector<Leftover> findLeftovers(const Environment& env, const AppInfo& app,
+                                   const std::vector<AppInfo>& installed) {
     std::vector<Leftover> out;
-    const auto add = [&](const fs::path& p, LeftoverKind kind) {
+    const auto add = [&](const fs::path& p, LeftoverKind kind, bool system) {
         Leftover l;
         l.path = p.string();
         l.kind = kind;
@@ -99,18 +100,33 @@ std::vector<Leftover> findLeftovers(const Environment& env, const AppInfo& app) 
         if (::lstat(p.c_str(), &st) == 0) {
             l.sizeBytes = S_ISDIR(st.st_mode) ? directorySizeBytes(p) : static_cast<std::uint64_t>(st.st_size);
         }
-        l.needsAdmin = !env.ownedByUser(l.path);
+        l.needsAdmin = system || !env.ownedByUser(l.path);
         out.push_back(std::move(l));
     };
 
-    add(app.path, LeftoverKind::AppBundle);
+    add(app.path, LeftoverKind::AppBundle, false);
+    if (env.home.empty()) return out; // fail closed: no Library to scan against
 
     const std::string& id = app.bundleId;
-    const auto idRule = [&](const std::string& n) { return matchesId(n, id); };
-    const auto idOrName = [&](const std::string& n) { return matchesId(n, id) || (!app.name.empty() && equalsCi(n, app.name)); };
+    std::vector<const AppInfo*> others;
+    for (const auto& o : installed)
+        if (o.path != app.path) others.push_back(&o);
+    // An entry of a more specific installed sibling (com.foo.app.beta for com.foo.app) is not ours.
+    const auto siblingOwns = [&](const std::string& n, const std::string& prefix) {
+        return std::any_of(others.begin(), others.end(), [&](const AppInfo* o) {
+            return o->bundleId.size() > id.size() && matchesId(n, prefix + o->bundleId);
+        });
+    };
+    const auto idRule = [&](const std::string& n) { return matchesId(n, id) && !siblingOwns(n, ""); };
+    const auto idOrName = [&](const std::string& n) { return idRule(n) || (!app.name.empty() && equalsCi(n, app.name)); };
     const auto groupRule = [&](const std::string& n) {
+        // A group another installed app declares is shared (Office apps share UBF8T346G9.Office).
+        const bool shared = std::any_of(others.begin(), others.end(), [&](const AppInfo* o) {
+            return std::any_of(o->appGroups.begin(), o->appGroups.end(), [&](const std::string& g) { return equalsCi(n, g); });
+        });
+        if (shared) return false;
         if (idRule(n)) return true;
-        if (!app.teamId.empty() && matchesId(n, app.teamId + "." + id)) return true;
+        if (!app.teamId.empty() && matchesId(n, app.teamId + "." + id) && !siblingOwns(n, app.teamId + ".")) return true;
         return std::any_of(app.appGroups.begin(), app.appGroups.end(), [&](const std::string& g) { return equalsCi(n, g); });
     };
     const auto exact = [&](const char* suffix) {
@@ -131,9 +147,10 @@ std::vector<Leftover> findLeftovers(const Environment& env, const AppInfo& app) 
         LeftoverKind kind;
         std::function<bool(const std::string&)> match;
     };
-    const auto scan = [&](const fs::path& dir, LeftoverKind kind, const std::function<bool(const std::string&)>& match) {
+    const auto scan = [&](const fs::path& dir, LeftoverKind kind, const std::function<bool(const std::string&)>& match,
+                          bool system) {
         for (const auto& p : topLevel(dir))
-            if (match(p.filename().string())) add(p, kind);
+            if (match(p.filename().string())) add(p, kind, system);
     };
 
     const fs::path userLib = fs::path(env.home) / "Library";
@@ -151,9 +168,9 @@ std::vector<Leftover> findLeftovers(const Environment& env, const AppInfo& app) 
         {"Cookies", LeftoverKind::Cookies, exact(".binarycookies")},
         {"LaunchAgents", LeftoverKind::LaunchAgent, agentRule(userLib / "LaunchAgents")},
     };
-    for (const auto& l : user) scan(userLib / l.dir, l.kind, l.match);
+    for (const auto& l : user) scan(userLib / l.dir, l.kind, l.match, false);
 
-    // Same rules under /Library. Root-owned matches come back with needsAdmin.
+    // Same rules under /Library. /Library is never an allowed root: every match is needsAdmin.
     // LaunchDaemons use the Launch Agent kind; PrivilegedHelperTools use Support.
     const fs::path sysLib = env.systemLibrary;
     const std::vector<Location> system = {
@@ -164,7 +181,7 @@ std::vector<Leftover> findLeftovers(const Environment& env, const AppInfo& app) 
         {"LaunchDaemons", LeftoverKind::LaunchAgent, agentRule(sysLib / "LaunchDaemons")},
         {"PrivilegedHelperTools", LeftoverKind::Support, idRule},
     };
-    for (const auto& l : system) scan(sysLib / l.dir, l.kind, l.match);
+    for (const auto& l : system) scan(sysLib / l.dir, l.kind, l.match, true);
 
     return out;
 }
@@ -178,6 +195,7 @@ bool isAppRunning(const std::string& appPath) {
 
 safety::AllowedRoots leftoverRoots(const Environment& env) {
     safety::AllowedRoots roots;
+    if (env.home.empty()) return roots; // fail closed: never resolve against the CWD
     const fs::path lib = fs::path(env.home) / "Library";
     for (const char* d : {"Application Support", "Caches", "Preferences", "Containers", "Group Containers",
                           "Saved Application State", "Logs", "HTTPStorages", "WebKit", "Cookies", "LaunchAgents"})

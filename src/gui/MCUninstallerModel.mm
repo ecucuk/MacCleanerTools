@@ -104,6 +104,7 @@ bool trashKeepingErrno(const fs::path &path, std::string &error) {
 @interface MCUninstallerModel () {
     // Both belong to the work queue.
     uninstaller::Environment _environment;
+    std::vector<uninstaller::AppInfo> _installed; // last listApps result, for findLeftovers
     std::set<std::string> _brewApps; // "Foo.app" bundle names of installed casks
     bool _brewRead;
     // Bumped by each load; an older size walk stops when it sees a newer one.
@@ -130,7 +131,8 @@ bool trashKeepingErrno(const fs::path &path, std::string &error) {
     const unsigned generation = ++_generation;
     dispatch_async(self.workQueue, ^{
         NSMutableArray<MCAppRow *> *apps = [NSMutableArray array];
-        for (const auto &app : uninstaller::listApps(self->_environment)) {
+        self->_installed = uninstaller::listApps(self->_environment);
+        for (const auto &app : self->_installed) {
             [apps addObject:[[MCAppRow alloc] initWithCore:app]];
         }
         dispatch_async(dispatch_get_main_queue(), ^{ done(apps); });
@@ -164,7 +166,7 @@ bool trashKeepingErrno(const fs::path &path, std::string &error) {
 - (void)loadLeftoversForApp:(MCAppRow *)app done:(void (^)(NSArray<MCLeftoverRow *> *))done {
     dispatch_async(self.workQueue, ^{
         NSMutableArray<MCLeftoverRow *> *items = [NSMutableArray array];
-        for (const auto &leftover : uninstaller::findLeftovers(self->_environment, app->_core)) {
+        for (const auto &leftover : uninstaller::findLeftovers(self->_environment, app->_core, self->_installed)) {
             [items addObject:[[MCLeftoverRow alloc] initWithCore:leftover]];
         }
         const BOOL homebrew = self->_brewApps.count(fs::path(app->_core.path).filename().string()) > 0;

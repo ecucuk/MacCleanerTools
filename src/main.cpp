@@ -511,7 +511,7 @@ int runUninstall(const CliOptions& options) {
         return 2;
     }
     const un::AppInfo& app = *matches.front();
-    const std::vector<un::Leftover> leftovers = un::findLeftovers(env, app);
+    const std::vector<un::Leftover> leftovers = un::findLeftovers(env, app, apps);
 
     std::uint64_t total = 0;
     std::vector<un::Leftover> selected;

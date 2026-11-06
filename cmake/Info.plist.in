@@ -32,6 +32,8 @@
 	     directories, so it must not be sandboxed into a container. -->
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>MacCleaner looks for duplicate and blurry photos in your library. Nothing is removed unless you choose it.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>MacCleaner asks Finder to move protected app files to the Trash. macOS then asks for your password.</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.utilities</string>
 </dict>

@@ -1,5 +1,7 @@
 #import "MCUninstallerModel.h"
 
+#import <AppKit/AppKit.h>
+
 #import "MCSettings.h"
 
 #include "maccleaner/scanner.hpp"
@@ -10,6 +12,8 @@
 #include <cerrno>
 #include <cstring>
 #include <filesystem>
+
+#include <sys/stat.h>
 #include <set>
 #include <string>
 #include <vector>
@@ -53,6 +57,84 @@ bool trashKeepingErrno(const fs::path &path, std::string &error) {
     }
 }
 
+bool stillThere(const std::string &path) {
+    struct stat st {};
+    return ::lstat(path.c_str(), &st) == 0;
+}
+
+// Fallback to NSWorkspace: Finder asks for the password itself. Paths travel as
+// argv, never as script text. Needs NSAppleEventsUsageDescription: macOS asks
+// once for permission to control Finder.
+std::string trashWithFinder(const std::vector<std::string> &paths, bool *cancelled) {
+    std::vector<std::string> command = {
+        "/usr/bin/osascript",
+        "-e", "on run argv",
+        "-e", "set targets to {}",
+        "-e", "repeat with target in argv",
+        "-e", "set end of targets to (POSIX file (contents of target)) as alias",
+        "-e", "end repeat",
+        "-e", "with timeout of 600 seconds",
+        "-e", "tell application \"Finder\" to delete targets",
+        "-e", "end timeout",
+        "-e", "end run",
+    };
+    command.insert(command.end(), paths.begin(), paths.end());
+    const auto result = updater::runCommand(command, 610);
+    if (result.exitCode == 0) {
+        return {};
+    }
+    if (result.output.find("-128") != std::string::npos) {
+        *cancelled = true;
+        return {};
+    }
+    if (result.output.find("-1743") != std::string::npos) {
+        return "Allow MacCleaner to control Finder in Privacy & Security › Automation";
+    }
+    return result.output.empty() ? "Finder could not move the item" : result.output;
+}
+
+// macOS moves root-owned items to the Trash after its own password prompt:
+// MacCleaner never sees the password and never runs as root. One call, so one
+// prompt. Each result comes from the disk, not from what the call reported.
+std::vector<uninstaller::RemovalResult> trashWithPassword(const std::vector<std::string> &paths) {
+    NSMutableArray<NSURL *> *urls = [NSMutableArray array];
+    for (const auto &path : paths) {
+        NSString *nsPath = [NSString stringWithUTF8String:path.c_str()];
+        if (nsPath != nil) {
+            [urls addObject:[NSURL fileURLWithPath:nsPath]];
+        }
+    }
+    __block bool cancelled = false;
+    dispatch_semaphore_t finished = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSWorkspace.sharedWorkspace recycleURLs:urls
+                               completionHandler:^(NSDictionary<NSURL *, NSURL *> *, NSError *error) {
+                                   cancelled = [error.domain isEqualToString:NSCocoaErrorDomain] &&
+                                               error.code == NSUserCancelledError;
+                                   dispatch_semaphore_signal(finished);
+                               }];
+    });
+    dispatch_semaphore_wait(finished, DISPATCH_TIME_FOREVER);
+
+    std::vector<std::string> remaining;
+    for (const auto &path : paths) {
+        if (stillThere(path)) {
+            remaining.push_back(path);
+        }
+    }
+    std::string failure;
+    if (!remaining.empty() && !cancelled) {
+        failure = trashWithFinder(remaining, &cancelled);
+    }
+
+    std::vector<uninstaller::RemovalResult> results;
+    for (const auto &path : paths) {
+        const bool ok = !stillThere(path);
+        results.push_back({path, ok, ok ? "" : cancelled ? "Cancelled" : !failure.empty() ? failure : "Not moved"});
+    }
+    return results;
+}
+
 } // namespace
 
 @interface MCAppRow () {
@@ -88,7 +170,7 @@ bool trashKeepingErrno(const fs::path &path, std::string &error) {
         _kind = toNSString(uninstaller::toString(core.kind));
         _sizeBytes = core.sizeBytes;
         _needsAdmin = core.needsAdmin;
-        _selected = !core.needsAdmin;
+        _selected = YES;
     }
     return self;
 }
@@ -199,7 +281,7 @@ bool trashKeepingErrno(const fs::path &path, std::string &error) {
         }
         std::string refusal;
         const auto results = uninstaller::uninstall(self->_environment, app->_core, selected, trashKeepingErrno,
-                                                    uninstaller::isAppRunning, &refusal);
+                                                    uninstaller::isAppRunning, &refusal, trashWithPassword);
         NSMutableArray<MCRemovalRow *> *rows = [NSMutableArray array];
         for (const auto &result : results) {
             uint64_t size = 0;

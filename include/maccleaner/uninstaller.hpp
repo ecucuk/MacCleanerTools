@@ -31,7 +31,7 @@ struct Leftover {
     std::string path;
     LeftoverKind kind = LeftoverKind::Support;
     std::uint64_t sizeBytes = 0;
-    bool needsAdmin = false;   // not owned by the current user: listed, never removed
+    bool needsAdmin = false;   // root-owned or in /Library: removed only through AdminTrashFn
 };
 
 struct LaunchAgentInfo {
@@ -76,6 +76,9 @@ struct RemovalResult {
 
 using TrashFn = std::function<bool(const std::filesystem::path&, std::string& error)>;
 using RunningFn = std::function<bool(const std::string& appPath)>;
+// Moves all paths to the Trash in one operation, so macOS asks for the
+// password once. Returns one result per path.
+using AdminTrashFn = std::function<std::vector<RemovalResult>(const std::vector<std::string>& paths)>;
 
 // True if any process of the current user runs from inside the bundle.
 bool isAppRunning(const std::string& appPath);
@@ -86,12 +89,17 @@ safety::AllowedRoots leftoverRoots(const Environment& env);
 
 // Moves the selected rows to the Trash: leftovers first, the bundle last.
 // Refuses (empty result, *refusal set) for an Apple-signed or running app.
-// A failure on one row does not stop the others. needsAdmin rows are skipped.
+// A failure on one row does not stop the others.
+// needsAdmin rows go to adminTrash in one call, after the user's leftovers and
+// before a user-owned bundle; without adminTrash they are skipped. Each must
+// be the app's bundle or a direct child of a leftover location: a row that is
+// anything else fails and never reaches adminTrash.
 // Trusts that selected comes from findLeftovers for the match rules: only the
 // safety checks (allowed roots, bundle location) are done again here.
 std::vector<RemovalResult> uninstall(const Environment& env, const AppInfo& app,
                                      const std::vector<Leftover>& selected, const TrashFn& trash,
-                                     const RunningFn& running, std::string* refusal);
+                                     const RunningFn& running, std::string* refusal,
+                                     const AdminTrashFn& adminTrash = {});
 
 // Real machine: platform file (uninstaller_mac.mm / uninstaller_fallback.cpp).
 Environment defaultEnvironment();

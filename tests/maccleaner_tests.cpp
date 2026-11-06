@@ -3395,6 +3395,113 @@ void testCliVersionAndCheckUpdate() {
     CHECK(!parse({"mac_cleaner", "check-update", "--apply"}, error).has_value());
 }
 
+// Records each admin batch; every path counts as moved.
+struct AdminRecorder {
+    std::vector<std::vector<std::string>> batches;
+    std::vector<std::string>* order = nullptr; // shared with a TrashRecorder to see the sequence
+    un::AdminTrashFn fn() {
+        return [this](const std::vector<std::string>& paths) {
+            batches.push_back(paths);
+            std::vector<un::RemovalResult> results;
+            for (const auto& p : paths) {
+                if (order != nullptr) order->push_back(p);
+                results.push_back({p, true, {}});
+            }
+            return results;
+        };
+    }
+};
+
+void testUninstallAdminRowsGoInOneBatch() {
+    UninstallFixture f;
+    f.touch(f.lib / "Caches/com.foo.app/a");
+    f.touch(f.sys / "Application Support/Foo/a");
+    f.touch(f.sys / "LaunchDaemons/com.foo.app.plist");
+    f.notOwned.insert((f.apps / "Foo.app").string());
+    auto items = un::findLeftovers(f.env, f.foo(), {});
+    TrashRecorder rec;
+    AdminRecorder admin;
+    auto r = un::uninstall(f.env, f.foo(), items, rec.fn(), kNotRunning, nullptr, admin.fn());
+    CHECK_EQ(admin.batches.size(), 1u); // one password prompt
+    if (!admin.batches.empty()) {
+        CHECK_EQ(admin.batches[0].size(), 3u);
+        CHECK_EQ(admin.batches[0].back(), (f.apps / "Foo.app").string()); // the bundle goes last
+    }
+    CHECK_EQ(rec.calls.size(), 1u); // only the user's cache
+    CHECK_EQ(r.size(), 4u);
+    for (const auto& x : r) CHECK(x.ok);
+}
+
+void testUninstallAdminRunsBeforeUserBundle() {
+    UninstallFixture f;
+    f.touch(f.sys / "Application Support/Foo/a");
+    std::vector<std::string> order;
+    un::TrashFn trash = [&](const fs::path& p, std::string&) {
+        order.push_back(p.string());
+        return true;
+    };
+    AdminRecorder admin;
+    admin.order = &order;
+    un::uninstall(f.env, f.foo(), un::findLeftovers(f.env, f.foo(), {}), trash, kNotRunning, nullptr, admin.fn());
+    CHECK_EQ(order.size(), 2u);
+    if (order.size() == 2) CHECK_EQ(order.back(), (f.apps / "Foo.app").string());
+}
+
+void testUninstallAdminRejectsOtherPaths() {
+    UninstallFixture f;
+    std::error_code ec;
+    f.touch(f.sys / "Frameworks/com.foo.app");              // not a leftover location
+    f.touch(f.sys / "Application Support/Foo/inner");       // not a direct child
+    f.touch(f.home / "Documents/com.foo.app");              // user's data
+    fs::create_directories(f.sys / "Caches");
+    fs::create_directory_symlink(f.tree.outside(), f.sys / "Caches/com.foo.app", ec);
+    fs::create_directories(f.tree.outside() / "Other.app");
+    std::vector<un::Leftover> rows;
+    for (const fs::path& p : {f.sys / "Frameworks/com.foo.app", f.sys / "Application Support/Foo/inner",
+                              f.home / "Documents/com.foo.app", f.sys / "Caches/com.foo.app"}) {
+        un::Leftover row;
+        row.path = p.string();
+        row.needsAdmin = true;
+        rows.push_back(row);
+    }
+    un::Leftover wrongBundle;
+    wrongBundle.path = (f.apps / "Bar.app").string();
+    wrongBundle.kind = un::LeftoverKind::AppBundle;
+    wrongBundle.needsAdmin = true;
+    rows.push_back(wrongBundle);
+    TrashRecorder rec;
+    AdminRecorder admin;
+    auto r = un::uninstall(f.env, f.foo(), rows, rec.fn(), kNotRunning, nullptr, admin.fn());
+    CHECK(admin.batches.empty());
+    CHECK_EQ(r.size(), rows.size());
+    for (const auto& x : r) {
+        CHECK(!x.ok);
+        CHECK(!x.error.empty());
+    }
+}
+
+void testUninstallAdminAcceptsRootOwnedUserLibraryRow() {
+    UninstallFixture f;
+    f.touch(f.lib / "Caches/com.foo.app/a");
+    f.notOwned.insert((f.lib / "Caches/com.foo.app").string());
+    auto items = un::findLeftovers(f.env, f.foo(), {});
+    TrashRecorder rec;
+    AdminRecorder admin;
+    un::uninstall(f.env, f.foo(), items, rec.fn(), kNotRunning, nullptr, admin.fn());
+    CHECK_EQ(admin.batches.size(), 1u);
+    if (!admin.batches.empty()) CHECK_EQ(admin.batches[0][0], (f.lib / "Caches/com.foo.app").string());
+}
+
+void testUninstallSafetyOwnerCheckIsOptional() {
+#if defined(__APPLE__)
+    const fs::path rootOwned = "/System/Applications/Calculator.app";
+    const std::vector<fs::path> folders = {"/System/Applications"};
+    std::string reason;
+    CHECK(!maccleaner::safety::isSafeToUninstall(rootOwned, folders, &reason));
+    CHECK(maccleaner::safety::isSafeToUninstall(rootOwned, folders, &reason, false));
+#endif
+}
+
 int main() {
     testHumanReadableBytes();
 
@@ -3595,6 +3702,11 @@ int main() {
     testSelfUpdateRejectsBadRelease();
     testSelfUpdateIsNewer();
     testCliVersionAndCheckUpdate();
+    testUninstallAdminRowsGoInOneBatch();
+    testUninstallAdminRunsBeforeUserBundle();
+    testUninstallAdminRejectsOtherPaths();
+    testUninstallAdminAcceptsRootOwnedUserLibraryRow();
+    testUninstallSafetyOwnerCheckIsOptional();
 
     if (g_failures == 0) {
         std::cout << "All tests passed.\n";

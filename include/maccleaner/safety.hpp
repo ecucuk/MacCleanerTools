@@ -59,9 +59,10 @@ const std::vector<std::filesystem::path>& hardDenylist();
 // real (non-symlink) directory named *.app, owned by the current user, whose
 // parent is one of `appFolders` (/Applications, ~/Applications in
 // production). /Applications stays in hardDenylist; this does not relax
-// isSafeToDelete.
+// isSafeToDelete. requireOwner = false drops only the owner check, for a
+// root-owned app that macOS itself will ask a password for.
 bool isSafeToUninstall(const std::filesystem::path& appBundle,
                        const std::vector<std::filesystem::path>& appFolders,
-                       std::string* reasonIfUnsafe = nullptr);
+                       std::string* reasonIfUnsafe = nullptr, bool requireOwner = true);
 
 } // namespace maccleaner::safety

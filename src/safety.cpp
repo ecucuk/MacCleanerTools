@@ -185,7 +185,7 @@ bool isSafeToDelete(const fs::path& candidate, const AllowedRoots& allowed, std:
 }
 
 bool isSafeToUninstall(const fs::path& appBundle, const std::vector<fs::path>& appFolders,
-                       std::string* reasonIfUnsafe) {
+                       std::string* reasonIfUnsafe, bool requireOwner) {
     auto reject = [&](const std::string& reason) {
         if (reasonIfUnsafe != nullptr) {
             *reasonIfUnsafe = reason;
@@ -209,7 +209,7 @@ bool isSafeToUninstall(const fs::path& appBundle, const std::vector<fs::path>& a
     if (extension != ".app") {
         return reject("not an app bundle (*.app): " + appBundle.string());
     }
-    if (lst.st_uid != ::geteuid()) {
+    if (requireOwner && lst.st_uid != ::geteuid()) {
         return reject("bundle is not owned by the current user: " + appBundle.string());
     }
 

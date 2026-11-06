@@ -203,9 +203,51 @@ safety::AllowedRoots leftoverRoots(const Environment& env) {
     return roots;
 }
 
+namespace {
+
+// The folders whose direct children findLeftovers may return. An admin row
+// outside them never reaches the password prompt.
+std::vector<fs::path> leftoverFolders(const Environment& env) {
+    std::vector<fs::path> folders;
+    const fs::path sys = env.systemLibrary;
+    for (const char* d : {"Application Support", "Caches", "Preferences", "LaunchAgents", "LaunchDaemons",
+                          "PrivilegedHelperTools"})
+        folders.push_back(sys / d);
+    if (!env.home.empty()) {
+        const fs::path lib = fs::path(env.home) / "Library";
+        for (const char* d : {"Application Support", "Caches", "Preferences", "Preferences/ByHost", "Containers",
+                              "Group Containers", "Saved Application State", "Logs", "HTTPStorages", "WebKit",
+                              "Cookies", "LaunchAgents"})
+            folders.push_back(lib / d);
+    }
+    return folders;
+}
+
+bool isAdminLeftover(const fs::path& path, const std::vector<fs::path>& folders, std::string* reason) {
+    struct stat st {};
+    if (::lstat(path.c_str(), &st) != 0 || S_ISLNK(st.st_mode)) {
+        *reason = "refusing a symlink or unreadable path: " + path.string();
+        return false;
+    }
+    std::error_code ec;
+    const fs::path parent = fs::weakly_canonical(path.parent_path(), ec);
+    if (!ec) {
+        for (const auto& folder : folders) {
+            std::error_code folderEc;
+            const fs::path canonical = fs::weakly_canonical(folder, folderEc);
+            if (!folderEc && canonical == parent) return true;
+        }
+    }
+    *reason = "not in a leftover location: " + path.string();
+    return false;
+}
+
+} // namespace
+
 std::vector<RemovalResult> uninstall(const Environment& env, const AppInfo& app,
                                      const std::vector<Leftover>& selected, const TrashFn& trash,
-                                     const RunningFn& running, std::string* refusal) {
+                                     const RunningFn& running, std::string* refusal,
+                                     const AdminTrashFn& adminTrash) {
     const auto refuse = [&](const std::string& why) {
         if (refusal != nullptr) *refusal = why;
         return std::vector<RemovalResult>{};
@@ -243,6 +285,35 @@ std::vector<RemovalResult> uninstall(const Environment& env, const AppInfo& app,
     std::vector<RemovalResult> results;
     for (const auto& row : selected)
         if (!row.needsAdmin && row.kind != LeftoverKind::AppBundle) results.push_back(remove(row));
+
+    if (adminTrash) {
+        const std::vector<fs::path> leftoverDirs = leftoverFolders(env);
+        std::vector<std::string> batch;
+        const auto admit = [&](const Leftover& row) {
+            RemovalResult r{row.path, false, {}};
+            struct stat st {};
+            const bool bundle = row.kind == LeftoverKind::AppBundle;
+            if (::lstat(row.path.c_str(), &st) != 0 && (errno == ENOENT || errno == ENOTDIR)) {
+                r.ok = true; // already gone counts as done
+            } else if (bundle && row.path != app.path) {
+                r.error = "Not the selected app's bundle";
+            } else if (bundle ? safety::isSafeToUninstall(row.path, folders, &r.error, false)
+                              : isAdminLeftover(row.path, leftoverDirs, &r.error)) {
+                batch.push_back(row.path);
+                return;
+            }
+            results.push_back(std::move(r));
+        };
+        for (const auto& row : selected)
+            if (row.needsAdmin && row.kind != LeftoverKind::AppBundle) admit(row);
+        for (const auto& row : selected)
+            if (row.needsAdmin && row.kind == LeftoverKind::AppBundle) admit(row);
+        if (!batch.empty()) {
+            auto moved = adminTrash(batch);
+            results.insert(results.end(), moved.begin(), moved.end());
+        }
+    }
+
     for (const auto& row : selected)
         if (!row.needsAdmin && row.kind == LeftoverKind::AppBundle) results.push_back(remove(row));
     return results;

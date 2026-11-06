@@ -399,9 +399,12 @@ Trash, so you can put it back. It never deletes for good.
   `Saved Application State`, `Logs`, `HTTPStorages`, `WebKit`, `Cookies` and
   `LaunchAgents` under `~/Library`. A LaunchAgent matches by its file name,
   its `Label`, or a `Program` inside the app bundle.
-- **Needs admin.** Matches in `/Library` (daemons, helper tools, caches) and
-  root-owned apps from a `.pkg` are listed as "Needs admin". They are never
-  removed and the tool never asks for a password. Remove them in Finder.
+- **Protected items.** Root-owned apps (App Store, `.pkg`) and matches in
+  `/Library` (daemons, helper tools, caches) show "Asks for password". The app
+  moves them to the Trash in one step through macOS (`NSWorkspace`, then
+  Finder), so macOS asks for the password and MacCleaner never sees it or runs
+  as root. Only the app's bundle and direct children of the leftover locations
+  can reach that step. The CLI lists them as `[needs admin]` and skips them.
 - **Running apps.** Quit the app first. The GUI offers to quit it; the CLI
   refuses with exit code 1.
 - **Homebrew.** For a cask app, the tool shows a note: also run

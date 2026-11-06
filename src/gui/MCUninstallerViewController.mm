@@ -181,7 +181,7 @@ NSScrollView *cardFor(NSTableView *table) {
 - (NSArray<MCLeftoverRow *> *)checkedRows {
     NSMutableArray<MCLeftoverRow *> *rows = [NSMutableArray array];
     for (MCLeftoverRow *row in self.reviewRows) {
-        if (row.selected && !row.needsAdmin) {
+        if (row.selected) {
             [rows addObject:row];
         }
     }
@@ -302,7 +302,7 @@ NSScrollView *cardFor(NSTableView *table) {
                                    [strongSelf showReviewForApp:app rows:rows];
                                    uint64_t total = 0;
                                    for (MCLeftoverRow *row in rows) {
-                                       total += row.needsAdmin ? 0 : row.sizeBytes;
+                                       total += row.sizeBytes;
                                    }
                                    strongSelf.statusLabel.stringValue =
                                        [NSString stringWithFormat:@"%@: %lu item(s), %@ removable.", app.name,
@@ -325,10 +325,18 @@ NSScrollView *cardFor(NSTableView *table) {
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = [NSString stringWithFormat:@"Move %lu item(s) of %@ to the Trash?", (unsigned long)rows.count,
                                                    app.name];
-    alert.informativeText = running.count > 0
-                                ? [NSString stringWithFormat:@"%@ is open. It will be asked to quit first. You can "
-                                                             @"put the items back from the Trash.", app.name]
-                                : @"You can put the items back from the Trash.";
+    NSMutableString *info = [NSMutableString stringWithString:@"You can put the items back from the Trash."];
+    if (running.count > 0) {
+        [info insertString:[NSString stringWithFormat:@"%@ is open. It will be asked to quit first. ", app.name]
+                   atIndex:0];
+    }
+    for (MCLeftoverRow *row in rows) {
+        if (row.needsAdmin) {
+            [info appendString:@" macOS will ask for your password for the items that need it."];
+            break;
+        }
+    }
+    alert.informativeText = info;
     [alert addButtonWithTitle:@"Uninstall"];
     [alert addButtonWithTitle:@"Cancel"];
     __weak MCUninstallerViewController *weakSelf = self;
@@ -480,8 +488,8 @@ NSScrollView *cardFor(NSTableView *table) {
     MCLeftoverRow *item = self.reviewRows[(NSUInteger)row];
     if ([identifier isEqualToString:kSelectColumn]) {
         NSButton *box = [NSButton checkboxWithTitle:@"" target:self action:@selector(toggleSelected:)];
-        box.state = item.selected && !item.needsAdmin ? NSControlStateValueOn : NSControlStateValueOff;
-        box.enabled = !item.needsAdmin && self.outcomes.count == 0 && !self.uninstalling;
+        box.state = item.selected ? NSControlStateValueOn : NSControlStateValueOff;
+        box.enabled = self.outcomes.count == 0 && !self.uninstalling;
         box.tag = row;
         return box;
     }
@@ -491,7 +499,7 @@ NSScrollView *cardFor(NSTableView *table) {
                          ? item.path.stringByAbbreviatingWithTildeInPath
                      : [identifier isEqualToString:kSizeColumn] ? bytesText(item.sizeBytes)
                      : outcome != nil                           ? outcome
-                     : item.needsAdmin                          ? @"Needs admin"
+                     : item.needsAdmin                          ? @"Asks for password"
                                                                 : @"";
     NSTextField *field = changingLabel(text);
     if ([identifier isEqualToString:kPathColumn]) {
@@ -503,9 +511,6 @@ NSScrollView *cardFor(NSTableView *table) {
         field.toolTip = text.length > 0 ? text : nil;
         field.textColor = outcome != nil && ![outcome isEqualToString:@"Moved to Trash"] ? NSColor.systemRedColor
                                                                                           : NSColor.secondaryLabelColor;
-    }
-    if (item.needsAdmin) {
-        field.textColor = NSColor.tertiaryLabelColor;
     }
     return field;
 }

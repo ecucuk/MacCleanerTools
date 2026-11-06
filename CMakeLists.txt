@@ -9,7 +9,7 @@ if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
 endif()
 
 project(mac_cleaner
-    VERSION 1.1.0
+    VERSION 1.2.0
     DESCRIPTION "macOS disk cleanup / storage optimization tool"
     LANGUAGES CXX)
 
